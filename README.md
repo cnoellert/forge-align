@@ -6,7 +6,7 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 
 - **Auto-detect** plate vs reference by resolution
 - **Multi-segment batch** — select many plates + one ref, aligns all
-- **Timewarp-aware** — correct source frame mapping for speed-ramped clips
+- **Timewarp-aware** — correct source frame mapping for Speed and Frame mode timewarps
 - **Three solve modes** — Similarity (4 DOF), Affine (6 DOF), Homography (8 DOF)
 - **Frame sampling** — First frame, First + Last, or Every N frames
 - **Confidence gate** — skips low-quality matches automatically
@@ -29,8 +29,9 @@ bash install.sh
 The installer will:
 1. Create (or reuse) a conda environment with Python 3.11
 2. Install OpenCV and NumPy
-3. Save the conda Python path for the hook to find
-4. Deploy the hook to your Flame project
+3. Check for ffmpeg
+4. Save the conda Python path to `~/.forge/config.yaml`
+5. Deploy the hook to your Flame project
 
 You can also specify options directly:
 ```bash

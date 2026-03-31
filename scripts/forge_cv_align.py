@@ -31,21 +31,29 @@ def _log(msg):
 # ---------------------------------------------------------------------------
 
 # forge conda env Python — has cv2, numpy, and forge_cv installed via pip.
-# Resolved from /opt/forge/config.yaml (written by `forge install`).
+# Resolved from ~/.forge/config.yaml (written by install.sh).
 # Fallback: ~/miniconda3/envs/forge/bin/python
 def _resolve_forge_python():
-    """Read conda_python from /opt/forge/config.yaml, with fallback."""
-    config_path = "/opt/forge/config.yaml"
+    """Read conda_python from ~/.forge/config.yaml, with fallback."""
+    config_path = os.path.expanduser("~/.forge/config.yaml")
     if os.path.exists(config_path):
         try:
-            import yaml
             with open(config_path) as f:
-                cfg = yaml.safe_load(f)
-            python_path = cfg.get("conda_python", "")
-            if python_path and os.path.exists(python_path):
-                return python_path
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("conda_python:"):
+                        python_path = line.split(":", 1)[1].strip()
+                        if python_path and os.path.exists(python_path):
+                            return python_path
         except Exception:
             pass
+    # Fallback: try common conda locations
+    for candidate in [
+        os.path.expanduser("~/miniconda3/envs/forge/bin/python"),
+        os.path.expanduser("~/anaconda3/envs/forge/bin/python"),
+    ]:
+        if os.path.exists(candidate):
+            return candidate
     return os.path.expanduser("~/miniconda3/envs/forge/bin/python")
 
 _FORGE_PYTHON = _resolve_forge_python()
@@ -376,11 +384,19 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
     tw = source_info.get("timewarp")
 
     def _source_frame_at_record(rec_frame):
-        """Get on-disk source frame for a given record position, respecting timewarp."""
+        """Get on-disk source frame for a given record position, respecting timewarp.
+
+        Uses get_timing() which returns the source frame value at a given
+        record position. Works for both Speed and Frame (Timing) mode
+        timewarps. The timing value is relative to source_in, so we compute
+        the offset from the base (rec_in) timing to get the delta.
+        """
         if tw:
-            st_base = tw.get_speed_timing(float(rec_in))
-            st = tw.get_speed_timing(float(rec_frame))
-            flame_frame = int(round(src_first + (st - st_base)))
+            # get_timing() returns the source timing value at the given
+            # record frame — works in both Speed and Frame modes.
+            timing_base = tw.get_timing(float(rec_in))
+            timing_at = tw.get_timing(float(rec_frame))
+            flame_frame = int(round(src_first + (timing_at - timing_base)))
         else:
             flame_frame = src_first + (rec_frame - rec_in)
         # Convert Flame-internal frame to on-disk frame number
@@ -391,8 +407,7 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
         return ref_base + (rec_frame - ref_info["record_in_frame"])
 
     if tw:
-        speed = tw.get_speed(float(rec_in))
-        _log(f"Timewarp: speed={speed:.1f}%")
+        _log(f"Timewarp detected (mode={tw.mode})")
 
     # Build frame pairs — clamp to overlap region with ref
     if solve_frames == "first":
@@ -558,13 +573,19 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
         return None
 
     if proc.returncode != 0:
-        _log(f"CV solve failed (exit {proc.returncode}): {proc.stderr[-500:]}")
+        _log(f"CV solve failed (exit {proc.returncode})")
+        if proc.stderr:
+            _log(f"  stderr: {proc.stderr[-500:]}")
+        if proc.stdout:
+            _log(f"  stdout: {proc.stdout[-500:]}")
         return None
 
     try:
         result = json.loads(proc.stdout.strip())
     except json.JSONDecodeError:
         _log(f"CV solve returned invalid JSON: {proc.stdout[:500]}")
+        if proc.stderr:
+            _log(f"  stderr: {proc.stderr[:500]}")
         return None
 
     if "error" in result:
