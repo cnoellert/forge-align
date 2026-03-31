@@ -31,11 +31,18 @@ The installer will:
 2. Install OpenCV and NumPy
 3. Check for ffmpeg
 4. Save the conda Python path to `~/.forge/config.yaml`
-5. Deploy the hook to your Flame project
+5. Deploy the hook — you choose: all projects or a single project
 
 You can also specify options directly:
 ```bash
-bash install.sh --env forge --project /mnt/server/projects/my_project
+# Install hook for all Flame projects
+bash install.sh --global
+
+# Install hook for a specific project
+bash install.sh --project /mnt/server/projects/my_project
+
+# Specify conda env name
+bash install.sh --env myenv --global
 ```
 
 After install, rescan Python Hooks in Flame (or restart).

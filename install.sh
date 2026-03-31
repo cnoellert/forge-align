@@ -3,12 +3,13 @@
 # FORGE CV Align — Installer
 #
 # Sets up a conda environment, installs CV dependencies, and deploys
-# the hook into a Flame project. Self-contained — no other repos needed.
+# the hook. Can install globally (all Flame projects) or per-project.
 #
 # Usage:
 #   bash install.sh
+#   bash install.sh --global
 #   bash install.sh --project /path/to/flame/project
-#   bash install.sh --env myenv --project /path/to/flame/project
+#   bash install.sh --env myenv --global
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -17,21 +18,25 @@ HOOK_NAME="forge_cv_align"
 DEFAULT_ENV="forge"
 CONFIG_DIR="$HOME/.forge"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
+SHARED_PYTHON_DIR="/opt/Autodesk/shared/python"
 
 # ── Parse args ──────────────────────────────────────────────────────
 ENV_NAME=""
 PROJECT_PATH=""
+DEPLOY_GLOBAL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --env)      ENV_NAME="$2";      shift 2 ;;
         --project)  PROJECT_PATH="$2";  shift 2 ;;
+        --global)   DEPLOY_GLOBAL="yes"; shift ;;
         -h|--help)
-            echo "Usage: bash install.sh [--env ENV_NAME] [--project /path/to/flame/project]"
+            echo "Usage: bash install.sh [--env ENV_NAME] [--global | --project /path/to/flame/project]"
             echo ""
             echo "Options:"
             echo "  --env       Conda environment name (default: forge)"
-            echo "  --project   Flame project path (will prompt if not provided)"
+            echo "  --global    Install hook for all Flame projects (/opt/Autodesk/shared/python)"
+            echo "  --project   Install hook for a specific Flame project"
             exit 0 ;;
         *)  echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -98,41 +103,68 @@ else
 fi
 echo "  Saved to $CONFIG_FILE"
 
-# ── Step 5: Deploy hook to Flame project ──────────────────────────
+# ── Step 5: Deploy hook ───────────────────────────────────────────
 echo ""
-if [[ -z "$PROJECT_PATH" ]]; then
-    read -rp "Flame project path (or press Enter to skip deploy): " PROJECT_PATH
+
+# If neither --global nor --project was passed, prompt the user
+if [[ -z "$DEPLOY_GLOBAL" && -z "$PROJECT_PATH" ]]; then
+    echo "Where should the hook be installed?"
+    echo ""
+    echo "  1) All projects  — $SHARED_PYTHON_DIR"
+    echo "  2) Single project — you provide the project path"
+    echo "  3) Skip deploy   — I'll do it manually"
+    echo ""
+    read -rp "Choice [1/2/3]: " DEPLOY_CHOICE
+    case "$DEPLOY_CHOICE" in
+        1) DEPLOY_GLOBAL="yes" ;;
+        2) read -rp "Flame project path: " PROJECT_PATH ;;
+        *) echo "Skipping hook deploy." ;;
+    esac
 fi
 
-if [[ -n "$PROJECT_PATH" ]]; then
+_deploy_hook() {
+    local dest="$1"
+    echo "Deploying hook to: $dest"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    cp "$SCRIPT_DIR/scripts/forge_cv_align.py" "$dest/"
+    echo "  Done."
+}
+
+if [[ "$DEPLOY_GLOBAL" == "yes" ]]; then
+    DEST="$SHARED_PYTHON_DIR/$HOOK_NAME"
+    if [[ ! -d "$SHARED_PYTHON_DIR" ]]; then
+        echo "Creating $SHARED_PYTHON_DIR (may require sudo)..."
+        sudo mkdir -p "$SHARED_PYTHON_DIR" 2>/dev/null || mkdir -p "$SHARED_PYTHON_DIR"
+    fi
+    _deploy_hook "$DEST"
+    echo ""
+    echo "  Hook available to all Flame projects."
+    echo "  Rescan Python Hooks in Flame (or restart) to activate."
+
+elif [[ -n "$PROJECT_PATH" ]]; then
     SETUPS_DIR="$PROJECT_PATH/setups"
     if [[ ! -d "$SETUPS_DIR" ]]; then
-        # Try with /System/Volumes/Data prefix (macOS firmlink)
         SETUPS_DIR="/System/Volumes/Data${PROJECT_PATH}/setups"
     fi
-
     if [[ ! -d "$SETUPS_DIR" ]]; then
         echo "ERROR: Could not find setups directory at $PROJECT_PATH"
         exit 1
     fi
-
-    DEST="$SETUPS_DIR/python/$HOOK_NAME"
-    echo "Deploying hook to: $DEST"
-
-    # Clean previous install
-    rm -rf "$DEST"
-    mkdir -p "$DEST"
-
-    # Copy hook script directly into the hook directory
-    cp "$SCRIPT_DIR/scripts/forge_cv_align.py" "$DEST/"
-
-    echo "  Done."
+    _deploy_hook "$SETUPS_DIR/python/$HOOK_NAME"
     echo ""
     echo "  Rescan Python Hooks in Flame (or restart) to activate."
+
 else
-    echo "Skipping hook deploy. To deploy manually:"
-    echo "  mkdir -p /path/to/project/setups/python/$HOOK_NAME"
-    echo "  cp $SCRIPT_DIR/scripts/forge_cv_align.py /path/to/project/setups/python/$HOOK_NAME/"
+    echo ""
+    echo "To deploy manually:"
+    echo "  Global (all projects):"
+    echo "    mkdir -p $SHARED_PYTHON_DIR/$HOOK_NAME"
+    echo "    cp $SCRIPT_DIR/scripts/forge_cv_align.py $SHARED_PYTHON_DIR/$HOOK_NAME/"
+    echo ""
+    echo "  Single project:"
+    echo "    mkdir -p /path/to/project/setups/python/$HOOK_NAME"
+    echo "    cp $SCRIPT_DIR/scripts/forge_cv_align.py /path/to/project/setups/python/$HOOK_NAME/"
 fi
 
 echo ""
