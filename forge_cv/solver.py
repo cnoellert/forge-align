@@ -20,6 +20,8 @@ def solve_alignment(
     match_ratio: float = 0.75,
     ransac_thresh: float = 3.0,
     mode: str = "similarity",
+    cs_a: str = "",
+    cs_b: str = "",
 ) -> AffineTransform:
     """Compute the transform that maps frame_b onto frame_a.
 
@@ -36,6 +38,8 @@ def solve_alignment(
             "similarity"  — uniform scale + rotation + translation (4 DOF)
             "affine"      — non-uniform scale + shear + rotation + translation (6 DOF)
             "homography"  — full perspective (8 DOF)
+        cs_a: Colourspace name for frame_a (e.g. "Rec.709 video", "ACEScg").
+        cs_b: Colourspace name for frame_b.
 
     Returns:
         AffineTransform with the computed values.
@@ -43,8 +47,8 @@ def solve_alignment(
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
 
-    gray_a = _to_gray_uint8(frame_a)
-    gray_b = _to_gray_uint8(frame_b)
+    gray_a = _to_gray_uint8(frame_a, cs_a)
+    gray_b = _to_gray_uint8(frame_b, cs_b)
 
     sift = cv2.SIFT_create(nfeatures=max_features)
     kp_a, desc_a = sift.detectAndCompute(gray_a, None)
@@ -195,11 +199,17 @@ def decompose_homography(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _to_gray_uint8(img: np.ndarray) -> np.ndarray:
+def _to_gray_uint8(img: np.ndarray, colourspace: str = "") -> np.ndarray:
     """Convert float32 RGB image to uint8 grayscale.
 
-    Applies sRGB gamma if the image appears to be linear (low mean value),
-    which is common for EXR/ACEScg footage.
+    Uses the colourspace name (from Flame) to apply the correct transfer
+    function so SIFT gets consistent contrast regardless of source encoding.
+
+    Supported colourspaces:
+      - Linear (ACEScg, ACES2065-1, scene-linear, etc.) → sRGB gamma
+      - Log (ARRI LogC3/4, REDLog3G10, Sony S-Log3, etc.) → log→linear→sRGB
+      - Display-referred (Rec.709, sRGB, etc.) → no transform needed
+      - Unknown/empty → heuristic fallback (mean < 0.2 → assume linear)
     """
     if len(img.shape) == 2:
         gray = img
@@ -209,14 +219,84 @@ def _to_gray_uint8(img: np.ndarray) -> np.ndarray:
         gray = 0.2989 * img[:, :, 0] + 0.5870 * img[:, :, 1] + 0.1140 * img[:, :, 2]
 
     if gray.dtype == np.float32 or gray.dtype == np.float64:
-        # Apply sRGB gamma if image looks linear (mean < 0.2 suggests linear EXR)
-        if gray.mean() < 0.2:
-            gray = np.clip(gray, 0.0, 1.0)
-            gray = np.where(gray <= 0.0031308,
-                            gray * 12.92,
-                            1.055 * np.power(gray, 1.0 / 2.4) - 0.055)
+        cs = colourspace.lower()
+        transfer = _classify_colourspace(cs)
+
+        if transfer == "linear":
+            gray = _linear_to_srgb(gray)
+        elif transfer == "log":
+            gray = _log_to_srgb(gray, cs)
+        elif transfer == "unknown":
+            # Heuristic fallback: low mean suggests linear EXR
+            if gray.mean() < 0.2:
+                gray = _linear_to_srgb(gray)
+        # "display" — already display-referred, no transform
+
         gray = np.clip(gray * 255, 0, 255).astype(np.uint8)
     return gray
+
+
+def _classify_colourspace(cs: str) -> str:
+    """Classify a colourspace name into transfer type."""
+    if not cs:
+        return "unknown"
+
+    # Display-referred — already good for uint8
+    display_keywords = ["rec.709", "rec709", "srgb", "bt.709", "bt709",
+                        "video", "display"]
+    for kw in display_keywords:
+        if kw in cs:
+            return "display"
+
+    # Log-encoded
+    log_keywords = ["logc", "log3g", "s-log", "slog", "log ", "cineon",
+                    "redlog", "v-log", "vlog", "panlog", "filmlight"]
+    for kw in log_keywords:
+        if kw in cs:
+            return "log"
+
+    # Linear / scene-referred
+    linear_keywords = ["acescg", "aces2065", "linear", "scene-linear",
+                       "scene linear", "ap0", "ap1"]
+    for kw in linear_keywords:
+        if kw in cs:
+            return "linear"
+
+    return "unknown"
+
+
+def _linear_to_srgb(gray: np.ndarray) -> np.ndarray:
+    """Apply sRGB OETF to linear data."""
+    gray = np.clip(gray, 0.0, 1.0)
+    return np.where(gray <= 0.0031308,
+                    gray * 12.92,
+                    1.055 * np.power(np.maximum(gray, 0.0), 1.0 / 2.4) - 0.055)
+
+
+def _log_to_srgb(gray: np.ndarray, cs: str) -> np.ndarray:
+    """Convert log-encoded data to sRGB-like display values.
+
+    Uses a generic log→linear→sRGB pipeline. The log decode is a
+    reasonable approximation that works across common log curves
+    (LogC3, REDLog3G10, S-Log3) for the purpose of feature detection.
+    Exact decode isn't critical — we just need usable contrast.
+    """
+    # Generic log decode: approximate LogC3-style curve
+    # LogC3: linear = (10^((x - 0.3855) / 0.2471) - 0.0522) / 5.555
+    # This is close enough for SIFT purposes across most log curves
+    if "logc" in cs or "arri" in cs:
+        linear = (np.power(10.0, (gray - 0.3855) / 0.2471) - 0.0522) / 5.555
+    elif "s-log" in cs or "slog" in cs:
+        # S-Log3 approximate
+        linear = np.power(10.0, (gray - 0.4105) / 0.2556) * 0.18 - 0.01
+    elif "redlog" in cs or "log3g" in cs:
+        # REDLog3G10 approximate
+        linear = (np.power(10.0, gray) - 1.0) / 155.975
+    else:
+        # Generic log: simple power function that produces decent contrast
+        linear = np.power(np.clip(gray, 0.0, 1.0), 2.2)
+
+    return _linear_to_srgb(np.clip(linear, 0.0, 1.0))
 
 
 def _identity_transform(frame_index: int, confidence: float = 0.0) -> AffineTransform:

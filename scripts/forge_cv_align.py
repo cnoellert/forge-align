@@ -361,7 +361,8 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
 
     _log(f"Source: {source_info['width']}x{source_info['height']} "
          f"@ {source_info['file_path']} "
-         f"(frame_offset={source_info['frame_offset']})")
+         f"(frame_offset={source_info['frame_offset']}, "
+         f"cs={source_info.get('colourspace', '?')})")
 
     rec_in = source_info["record_in_frame"]
     rec_out = source_info["record_out_frame"]
@@ -519,6 +520,12 @@ def _get_segment_info(seg):
                 # source_in doesn't match disk — use start_frame offset
                 frame_offset = src_in - seg.start_frame
 
+    # Get colourspace from Flame
+    try:
+        colourspace = str(seg.get_colour_space())
+    except Exception:
+        colourspace = ""
+
     return {
         "file_path": file_path,
         "width": seg.source_width,
@@ -529,6 +536,7 @@ def _get_segment_info(seg):
         "record_out_frame": seg.record_out.frame,
         "frame_offset": frame_offset,
         "timewarp": timewarp,
+        "colourspace": colourspace,
     }
 
 
@@ -564,6 +572,8 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
         "--record-in", str(record_in),
         "--record-out", str(record_out),
         "--mode", mode,
+        "--source-cs", source_info.get("colourspace", ""),
+        "--ref-cs", ref_info.get("colourspace", ""),
     ]
 
     _log(f"Subprocess: {' '.join(cmd)}")

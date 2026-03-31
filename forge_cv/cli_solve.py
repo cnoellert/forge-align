@@ -38,6 +38,10 @@ def main():
                         help="Last Action keyframe frame number")
     parser.add_argument("--mode", default="similarity",
                         choices=["similarity", "affine", "homography"])
+    parser.add_argument("--source-cs", default="",
+                        help="Source colourspace (e.g. ACEScg, ARRI LogC3)")
+    parser.add_argument("--ref-cs", default="",
+                        help="Reference colourspace (e.g. Rec.709 video)")
     args = parser.parse_args()
 
     source_frames = [int(f) for f in args.source_frames.split(",")]
@@ -78,6 +82,7 @@ def main():
 
         result = solve_alignment(
             ref_img, source_img, frame_index=action_frame, mode=args.mode,
+            cs_a=args.ref_cs, cs_b=args.source_cs,
         )
 
         if result.confidence <= 0.0:
