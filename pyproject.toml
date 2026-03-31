@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forge-align"
+version = "1.0.0"
+description = "FORGE CV Align — computer vision alignment for Autodesk Flame"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless>=4.8.0",
+    "numpy>=1.24.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["forge_cv*"]
