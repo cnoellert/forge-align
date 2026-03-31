@@ -1,4 +1,4 @@
-# forge_align
+# forge-align
 
 Computer vision alignment tool for Autodesk Flame. Matches plate segments to a reference using SIFT feature detection and creates Action effects with scale/position/rotation keyframes.
 
@@ -21,8 +21,8 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 ## Install
 
 ```bash
-git clone https://github.com/cnoellert/forge_align.git
-cd forge_align
+git clone https://github.com/cnoellert/forge-align.git
+cd forge-align
 bash install.sh
 ```
 
