@@ -386,16 +386,20 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
     def _source_frame_at_record(rec_frame):
         """Get on-disk source frame for a given record position, respecting timewarp.
 
-        Uses get_timing() which returns the source frame value at a given
-        record position. Works for both Speed and Frame (Timing) mode
-        timewarps. The timing value is relative to source_in, so we compute
-        the offset from the base (rec_in) timing to get the delta.
+        Flame has two timewarp modes with separate APIs:
+          - Speed mode:  get_speed_timing(frame) → source timing offset
+          - Timing mode: get_timing(frame) → source timing offset
+        We dispatch based on tw.mode.
         """
         if tw:
-            # get_timing() returns the source timing value at the given
-            # record frame — works in both Speed and Frame modes.
-            timing_base = tw.get_timing(float(rec_in))
-            timing_at = tw.get_timing(float(rec_frame))
+            tw_mode = tw.mode
+            if tw_mode == "Timing":
+                timing_base = tw.get_timing(float(rec_in))
+                timing_at = tw.get_timing(float(rec_frame))
+            else:
+                # Speed mode (default)
+                timing_base = tw.get_speed_timing(float(rec_in))
+                timing_at = tw.get_speed_timing(float(rec_frame))
             flame_frame = int(round(src_first + (timing_at - timing_base)))
         else:
             flame_frame = src_first + (rec_frame - rec_in)
@@ -566,26 +570,29 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
 
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=120,
+            cmd, capture_output=True, timeout=120,
         )
     except subprocess.TimeoutExpired:
         _log("CV solve subprocess timed out")
         return None
 
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+
     if proc.returncode != 0:
         _log(f"CV solve failed (exit {proc.returncode})")
-        if proc.stderr:
-            _log(f"  stderr: {proc.stderr[-500:]}")
-        if proc.stdout:
-            _log(f"  stdout: {proc.stdout[-500:]}")
+        if stderr:
+            _log(f"  stderr: {stderr[-500:]}")
+        if stdout:
+            _log(f"  stdout: {stdout[-500:]}")
         return None
 
     try:
-        result = json.loads(proc.stdout.strip())
+        result = json.loads(stdout.strip())
     except json.JSONDecodeError:
-        _log(f"CV solve returned invalid JSON: {proc.stdout[:500]}")
-        if proc.stderr:
-            _log(f"  stderr: {proc.stderr[:500]}")
+        _log(f"CV solve returned invalid JSON: {stdout[:500]}")
+        if stderr:
+            _log(f"  stderr: {stderr[:500]}")
         return None
 
     if "error" in result:
@@ -675,11 +682,12 @@ def _apply_action_effect(source_seg, flame_values_list, temp_dir):
     _log(f"Injecting {len(transforms_data)} keyframe(s) into: {action_file}")
     proc = subprocess.run(
         [_FORGE_PYTHON, "-c", inject_script, json.dumps(transforms_data), action_file],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, timeout=30,
     )
 
     if proc.returncode != 0:
-        raise RuntimeError(f"Action injection failed: {proc.stderr[-500:]}")
+        err = proc.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Action injection failed: {err[-500:]}")
 
     _log("Injected CV keyframes into .action file")
 

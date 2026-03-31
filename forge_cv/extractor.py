@@ -85,11 +85,12 @@ def extract_container_frame(
             out_path,
         ]
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
+            cmd, capture_output=True, timeout=30,
         )
         if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace")
             raise RuntimeError(
-                f"ffmpeg failed (exit {result.returncode}): {result.stderr[-500:]}"
+                f"ffmpeg failed (exit {result.returncode}): {stderr[-500:]}"
             )
         if not os.path.exists(out_path):
             raise RuntimeError("ffmpeg produced no output frame")
