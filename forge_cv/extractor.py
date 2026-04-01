@@ -99,7 +99,12 @@ def extract_container_frame(
         if img is None:
             raise ValueError(f"Could not decode extracted frame: {out_path}")
 
-        img = img.astype(np.float32) / 255.0
+        if img.dtype == np.uint8:
+            img = img.astype(np.float32) / 255.0
+        elif img.dtype == np.uint16:
+            img = img.astype(np.float32) / 65535.0
+        else:
+            img = img.astype(np.float32)
         if len(img.shape) == 3 and img.shape[2] >= 3:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img
