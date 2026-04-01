@@ -132,6 +132,7 @@ def _cv_align_dispatch(selection):
 
         ref_seg = segments[settings["ref_index"]]
         source_segs = [s for i, s in enumerate(segments) if i != settings["ref_index"]]
+        detector = settings["detector"]
         mode = settings["mode"]
         solve_frames = settings["solve_frames"]
         every_n = settings["every_n"]
@@ -145,8 +146,20 @@ def _cv_align_dispatch(selection):
         ref_info = _get_segment_info(ref_seg)
         ref_base = _compute_ref_base(ref_seg)
 
+        # FPS ratio: converts timeline frame offset → container frame index.
+        # Ratio = 1.0 when fps matches (the common case) — no-op.
+        seq_fps = _parse_flame_fps(str(seq.frame_rate))
+        ref_fps = _probe_container_fps(ref_info["file_path"])
+        if seq_fps and ref_fps and seq_fps > 0:
+            ref_fps_ratio = ref_fps / seq_fps
+            if abs(ref_fps_ratio - 1.0) > 0.001:
+                _log(f"FPS mismatch: seq={seq_fps:.4f}, ref={ref_fps:.4f}, "
+                     f"ratio={ref_fps_ratio:.6f}")
+        else:
+            ref_fps_ratio = 1.0
+
         _log(f"CV Align: {len(source_segs)} source(s), ref={ref_name}, "
-             f"mode={mode}, frames={solve_frames}, every_n={every_n}")
+             f"detector={detector}, mode={mode}, frames={solve_frames}, every_n={every_n}")
 
         # Process each source segment
         results_summary = []
@@ -157,7 +170,8 @@ def _cv_align_dispatch(selection):
             try:
                 result = _align_single_segment(
                     source_seg, ref_seg, ref_info, ref_base,
-                    out_w, out_h, mode, solve_frames, every_n,
+                    out_w, out_h, detector, mode, solve_frames, every_n,
+                    ref_fps_ratio=ref_fps_ratio,
                 )
                 results_summary.append((source_name, result))
             except Exception:
@@ -274,6 +288,12 @@ def _show_cv_align_dialog(segments, default_ref_idx):
     ref_combo.setCurrentIndex(default_ref_idx)
     layout.addLayout(_field_row("Reference", ref_combo))
 
+    # ── Detector selector ──
+    det_combo = QComboBox()
+    det_combo.addItems(["SIFT", "AKAZE"])
+    det_combo.setCurrentIndex(0)
+    layout.addLayout(_field_row("Detector", det_combo))
+
     # ── Mode selector ──
     mode_combo = QComboBox()
     mode_combo.addItems(["Similarity", "Affine", "Homography"])
@@ -339,12 +359,14 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 
     frames_map = {0: "first", 1: "first_last", 2: "every_n"}
     mode_map = {0: "similarity", 1: "affine", 2: "homography"}
+    det_map  = {0: "sift", 1: "akaze"}
 
     return {
-        "ref_index": ref_combo.currentIndex(),
-        "mode": mode_map[mode_combo.currentIndex()],
+        "ref_index":    ref_combo.currentIndex(),
+        "detector":     det_map[det_combo.currentIndex()],
+        "mode":         mode_map[mode_combo.currentIndex()],
         "solve_frames": frames_map[frames_combo.currentIndex()],
-        "every_n": n_spin.value() if frames_combo.currentIndex() == 2 else 1,
+        "every_n":      n_spin.value() if frames_combo.currentIndex() == 2 else 1,
     }
 
 
@@ -353,7 +375,8 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 # ---------------------------------------------------------------------------
 
 def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
-                          out_w, out_h, mode, solve_frames, every_n):
+                          out_w, out_h, detector, mode, solve_frames, every_n,
+                          ref_fps_ratio=1.0):
     """Align a single source segment to the reference. Returns summary dict."""
 
     source_info = _get_segment_info(source_seg)
@@ -408,8 +431,14 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
         return flame_frame - frame_offset
 
     def _ref_frame_at_record(rec_frame):
-        """Get ref container frame for a given record position."""
-        return ref_base + (rec_frame - ref_info["record_in_frame"])
+        """Get ref container frame for a given record position.
+
+        Applies ref_fps_ratio to convert from timeline frame offset to
+        container frame index when timeline fps ≠ ref container fps.
+        """
+        timeline_offset = rec_frame - ref_info["record_in_frame"]
+        container_offset = int(round(timeline_offset * ref_fps_ratio))
+        return ref_base + container_offset
 
     if tw:
         _log(f"Timewarp detected (mode={tw.mode})")
@@ -441,7 +470,7 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
     solve_result = _run_cv_solve(
         source_info, ref_info,
         source_frames, ref_frames,
-        out_w, out_h, mode,
+        out_w, out_h, detector, mode,
         action_frames[0], action_frames[-1],
     )
 
@@ -543,10 +572,47 @@ def _get_segment_info(seg):
 def _compute_ref_base(ref_seg):
     """Compute the container frame offset for the ref's record_in.
 
-    Accounts for head frames (pre-roll) in the container.
+    head is the number of handle frames in the container before the
+    segment's edit in-point.  For a clean import with no pre-roll this
+    is 0, meaning container frame 0 = record_in.
+
+    NOTE: source_in.frame is NOT a container frame index — it is Flame's
+    internal absolute frame number and must not be used here.
     """
-    head = ref_seg.head if hasattr(ref_seg, 'head') else 0
-    return head
+    return ref_seg.head if hasattr(ref_seg, 'head') else 0
+
+
+def _parse_flame_fps(fps_str):
+    """Parse Flame's frame_rate string to a float.
+
+    Handles formats like "23.976 fps", "24 fps", "29.97 fps".
+    Returns None on failure.
+    """
+    try:
+        return float(fps_str.split()[0])
+    except Exception:
+        return None
+
+
+def _probe_container_fps(path):
+    """Return the frame rate of a video container via ffprobe, or None."""
+    import subprocess
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".mov", ".mp4", ".mxf", ".avi"):
+        return None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "0", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", path],
+            capture_output=True, timeout=10,
+        )
+        text = result.stdout.decode("utf-8", errors="replace").strip().split("\n")[0]
+        if "/" in text:
+            num, den = text.split("/", 1)
+            return float(num) / float(den)
+        return float(text)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +620,7 @@ def _compute_ref_base(ref_seg):
 # ---------------------------------------------------------------------------
 
 def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
-                  out_w, out_h, mode, record_in=1, record_out=1):
+                  out_w, out_h, detector, mode, record_in=1, record_out=1):
     """Run the forge_cv alignment via subprocess."""
     import json
     import subprocess
@@ -569,8 +635,11 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
         "--source-height", str(source_info["height"]),
         "--output-width", str(out_w),
         "--output-height", str(out_h),
+        "--ref-width", str(ref_info["width"]),
+        "--ref-height", str(ref_info["height"]),
         "--record-in", str(record_in),
         "--record-out", str(record_out),
+        "--detector", detector,
         "--mode", mode,
         "--source-cs", source_info.get("colourspace", ""),
         "--ref-cs", ref_info.get("colourspace", ""),

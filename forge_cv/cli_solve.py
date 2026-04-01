@@ -38,6 +38,12 @@ def main():
                         help="Last Action keyframe frame number")
     parser.add_argument("--mode", default="similarity",
                         choices=["similarity", "affine", "homography"])
+    parser.add_argument("--detector", default="sift",
+                        choices=["sift", "akaze"])
+    parser.add_argument("--ref-width", type=int, default=0,
+                        help="Native width of the ref frame")
+    parser.add_argument("--ref-height", type=int, default=0,
+                        help="Native height of the ref frame")
     parser.add_argument("--source-cs", default="",
                         help="Source colourspace (e.g. ACEScg, ARRI LogC3)")
     parser.add_argument("--ref-cs", default="",
@@ -81,7 +87,8 @@ def main():
         ref_img = _read_ref_frame(args.ref, ref_frame)
 
         result = solve_alignment(
-            ref_img, source_img, frame_index=action_frame, mode=args.mode,
+            ref_img, source_img, frame_index=action_frame,
+            mode=args.mode, detector=args.detector,
             cs_a=args.ref_cs, cs_b=args.source_cs,
         )
 
@@ -92,7 +99,8 @@ def main():
             }))
             sys.exit(1)
 
-        fv = to_flame_values(result, plate_res=plate_res, output_res=output_res)
+        ref_res = (args.ref_width, args.ref_height) if args.ref_width and args.ref_height else None
+        fv = to_flame_values(result, plate_res=plate_res, output_res=output_res, ref_res=ref_res)
 
         results.append({
             "frame_index": action_frame,

@@ -44,58 +44,69 @@ def to_flame_values(
     t: AffineTransform,
     plate_res: Optional[Tuple[int, int]] = None,
     output_res: Optional[Tuple[int, int]] = None,
+    ref_res: Optional[Tuple[int, int]] = None,
 ) -> Dict[str, float]:
     """Convert an AffineTransform to Flame Action channel values.
 
-    The solver produces a homography mapping plate pixels → ref pixels
-    at their native resolutions. Action takes the plate at full raster
-    and outputs at project resolution (= ref resolution).
+    The solver produces a transform mapping plate pixels → ref pixels at
+    their native resolutions.  Action outputs at sequence resolution
+    (output_res), which may differ from the ref resolution (ref_res) the
+    solver worked in.  The reformat factor k = seq_w / ref_w converts the
+    solver’s result from ref pixel space into sequence/Action pixel space.
 
-    Action model (centre-based):
-      out_x = (plate_x - plate_cx) * S/100 + action_px + out_cx
-      out_y = (plate_y - plate_cy) * S/100 + out_cy - action_py  (Y-up)
+    Derivation:
+      Solver:  ref_x  = scale * plate_x + tx          (ref pixel space)
+      Action:  seq_x  = (plate_x - plate_cx) * (scale*k) + action_px + seq_cx
+      ⇒  action_scale_x = scale * k * 100
+      ⇒  action_px      = (tx + plate_cx * scale) * k - seq_cx
+      ⇒  action_py      = -((ty + plate_cy * scale) * k - seq_cy)
 
-    Solver model (direct pixel mapping):
-      ref_x = sx * plate_x + tx
-
-    Matching coefficients:
-      S/100 = sx   →   S = sx * 100
-      action_px = tx + plate_cx * S/100 - out_cx
-      action_py = -(ty + plate_cy * S/100 - out_cy)
+    When ref_res == output_res (common case), k = 1 and the formula
+    reduces to the original single-space version.
 
     Args:
-        t: Solver result mapping plate→ref at native resolutions.
-        plate_res: (width, height) of the plate. Required for cross-res.
-        output_res: (width, height) of the Action output / ref.
+        t:          Solver result mapping plate→ref at native resolutions.
+        plate_res:  (width, height) of the plate.
+        output_res: (width, height) of the Action output (sequence).
+        ref_res:    (width, height) of the ref frame used for solving.
+                    Defaults to output_res when omitted (k = 1).
     """
     if plate_res and output_res:
         plate_w, plate_h = plate_res
-        out_w, out_h = output_res
+        seq_w,   seq_h   = output_res
+
+        # Reformat factor: converts ref pixel space → sequence pixel space.
+        # k = 1.0 when ref_res == output_res (the common case).
+        ref_w = ref_res[0] if ref_res else seq_w
+        ref_h = ref_res[1] if ref_res else seq_h
+        kx = seq_w / ref_w if ref_w else 1.0
+        ky = seq_h / ref_h if ref_h else 1.0
+
         plate_cx, plate_cy = plate_w / 2.0, plate_h / 2.0
-        out_cx, out_cy = out_w / 2.0, out_h / 2.0
+        seq_cx,   seq_cy   = seq_w  / 2.0, seq_h  / 2.0
 
-        action_scale_x = t.scale_x * 100.0
-        action_scale_y = t.scale_y * 100.0
+        action_scale_x = t.scale_x * kx * 100.0
+        action_scale_y = t.scale_y * ky * 100.0
 
-        action_px = t.tx + plate_cx * t.scale_x - out_cx
-        action_py = -(t.ty + plate_cy * t.scale_y - out_cy)
+        action_px = (t.tx + plate_cx * t.scale_x) * kx - seq_cx
+        action_py = -((t.ty + plate_cy * t.scale_y) * ky - seq_cy)
 
         return {
             "position/x": action_px,
             "position/y": action_py,
             "rotation/z": t.rotation,
-            "scaling/x": action_scale_x,
-            "scaling/y": action_scale_y,
+            "scaling/x":  action_scale_x,
+            "scaling/y":  action_scale_y,
             "shearing/x": t.shear,
         }
 
-    # Same-resolution fallback
+    # Same-resolution fallback (no plate/output res provided)
     return {
         "position/x": t.tx,
         "position/y": -t.ty,
         "rotation/z": t.rotation,
-        "scaling/x": t.scale_x * 100.0,
-        "scaling/y": t.scale_y * 100.0,
+        "scaling/x":  t.scale_x * 100.0,
+        "scaling/y":  t.scale_y * 100.0,
         "shearing/x": t.shear,
     }
 
