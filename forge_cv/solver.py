@@ -11,6 +11,9 @@ from .types import AffineTransform
 # Valid solve modes
 MODES = ("similarity", "affine", "homography")
 
+# Valid detector types
+DETECTORS = ("sift", "akaze")
+
 
 def solve_alignment(
     frame_a: np.ndarray,
@@ -20,44 +23,53 @@ def solve_alignment(
     match_ratio: float = 0.75,
     ransac_thresh: float = 3.0,
     mode: str = "similarity",
+    detector: str = "sift",
     cs_a: str = "",
     cs_b: str = "",
 ) -> AffineTransform:
     """Compute the transform that maps frame_b onto frame_a.
 
-    Uses SIFT feature detection at each image's native resolution.
-
     Args:
         frame_a: Reference frame (float32 RGB, [0,1]).
         frame_b: Source frame to align (float32 RGB, [0,1]).
         frame_index: Frame number for the result.
-        max_features: Maximum SIFT features to detect.
-        match_ratio: Lowe's ratio test threshold.
-        ransac_thresh: RANSAC reprojection threshold in pixels.
-        mode: Transform model to fit:
-            "similarity"  — uniform scale + rotation + translation (4 DOF)
-            "affine"      — non-uniform scale + shear + rotation + translation (6 DOF)
-            "homography"  — full perspective (8 DOF)
-        cs_a: Colourspace name for frame_a (e.g. "Rec.709 video", "ACEScg").
+        max_features: Maximum features to detect (SIFT only; AKAZE uses threshold).
+        match_ratio: Lowe’s ratio test threshold.
+        ransac_thresh: RANSAC reprojection error threshold in pixels.
+        mode: Transform model — "similarity", "affine", or "homography".
+        detector: Feature detector — "sift" or "akaze".
+            SIFT   — float L2 descriptors, reliable across a wide scale range.
+            AKAZE  — binary M-LDB descriptors, non-linear scale space; more
+                      robust on low-contrast and textureless regions.
+        cs_a: Colourspace name for frame_a.
         cs_b: Colourspace name for frame_b.
 
     Returns:
-        AffineTransform with the computed values.
+        AffineTransform with tx/ty in native frame_a pixel coordinates.
     """
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    if detector not in DETECTORS:
+        raise ValueError(f"detector must be one of {DETECTORS}, got {detector!r}")
 
     gray_a = _to_gray_uint8(frame_a, cs_a)
     gray_b = _to_gray_uint8(frame_b, cs_b)
 
-    sift = cv2.SIFT_create(nfeatures=max_features)
-    kp_a, desc_a = sift.detectAndCompute(gray_a, None)
-    kp_b, desc_b = sift.detectAndCompute(gray_b, None)
+    # Build detector and matching norm
+    if detector == "akaze":
+        det = cv2.AKAZE_create()
+        norm = cv2.NORM_HAMMING   # M-LDB binary descriptors
+    else:
+        det = cv2.SIFT_create(nfeatures=max_features)
+        norm = cv2.NORM_L2
+
+    kp_a, desc_a = det.detectAndCompute(gray_a, None)
+    kp_b, desc_b = det.detectAndCompute(gray_b, None)
 
     if desc_a is None or desc_b is None or len(kp_a) < 4 or len(kp_b) < 4:
         return _identity_transform(frame_index, confidence=0.0)
 
-    bf = cv2.BFMatcher(cv2.NORM_L2)
+    bf = cv2.BFMatcher(norm)
     raw_matches = bf.knnMatch(desc_b, desc_a, k=2)
 
     # Lowe's ratio test
