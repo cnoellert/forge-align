@@ -2,6 +2,10 @@
 
 Computer vision alignment tool for Autodesk Flame. Matches plate segments to a reference using SIFT feature detection and creates Action effects with scale/position/rotation keyframes.
 
+## Demo
+
+[![FORGE CV Align Demo](https://img.youtube.com/vi/H9nHyEsL_2k/0.jpg)](https://youtu.be/H9nHyEsL_2k)
+
 ## Features
 
 - **Auto-detect** plate vs reference by resolution
