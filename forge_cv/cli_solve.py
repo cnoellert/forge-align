@@ -82,11 +82,46 @@ def main():
         ]
 
     results = []
+    ratios_logged = False
     for src_frame, ref_frame, action_frame in zip(
         source_frames, ref_frames, action_frames
     ):
         source_img = read_sequence_frame(args.source, src_frame)
         ref_img = _read_ref_frame(args.ref, ref_frame, fps=args.ref_fps)
+
+        # -----------------------------------------------------------------
+        # Disk vs segment resolution correction.
+        #
+        # Flame's seg.source_width/height (passed as --source-width/height
+        # and --ref-width/height) is the segment's working resolution,
+        # which may differ from the file on disk (e.g. media resized on
+        # import or published at half-res).  The solver works in disk pixel
+        # space; the Action operates in segment pixel space.  We detect the
+        # ratio for BOTH source and ref, then rescale the solver output.
+        # -----------------------------------------------------------------
+        src_disk_h, src_disk_w = source_img.shape[:2]
+        ref_disk_h, ref_disk_w = ref_img.shape[:2]
+
+        seg_w, seg_h = plate_res
+        ref_seg_w = args.ref_width if args.ref_width else ref_disk_w
+        ref_seg_h = args.ref_height if args.ref_height else ref_disk_h
+
+        # Source: disk vs segment ratio
+        src_rx = src_disk_w / seg_w if seg_w else 1.0
+        src_ry = src_disk_h / seg_h if seg_h else 1.0
+
+        # Ref: disk vs segment ratio
+        ref_rx = ref_disk_w / ref_seg_w if ref_seg_w else 1.0
+        ref_ry = ref_disk_h / ref_seg_h if ref_seg_h else 1.0
+
+        if not ratios_logged:
+            if abs(src_rx - 1.0) > 0.01 or abs(src_ry - 1.0) > 0.01:
+                print(f"source: disk {src_disk_w}x{src_disk_h} vs seg {seg_w}x{seg_h}, "
+                      f"ratio {src_rx:.3f}x{src_ry:.3f}", file=sys.stderr)
+            if abs(ref_rx - 1.0) > 0.01 or abs(ref_ry - 1.0) > 0.01:
+                print(f"ref: disk {ref_disk_w}x{ref_disk_h} vs seg {ref_seg_w}x{ref_seg_h}, "
+                      f"ratio {ref_rx:.3f}x{ref_ry:.3f}", file=sys.stderr)
+            ratios_logged = True
 
         result = solve_alignment(
             ref_img, source_img, frame_index=action_frame,
@@ -101,7 +136,36 @@ def main():
             }))
             sys.exit(1)
 
-        ref_res = (args.ref_width, args.ref_height) if args.ref_width and args.ref_height else None
+        # Rescale solver output from disk pixel space → segment pixel space.
+        #
+        # Solver maps: disk_src_pt → disk_ref_pt
+        #   ref_disk_pt = scale * src_disk_pt + tx
+        #
+        # In segment space: src_disk = src_seg * src_rx
+        #                   ref_disk = ref_seg * ref_rx
+        # So: ref_seg * ref_rx = scale * src_seg * src_rx + tx
+        #     ref_seg = (scale * src_rx / ref_rx) * src_seg + tx / ref_rx
+        #
+        # Effective scale in seg space: scale * src_rx / ref_rx
+        # Effective tx in ref-seg space: tx / ref_rx
+        #
+        from forge_cv.types import AffineTransform
+        eff_sx = result.scale_x * src_rx / ref_rx
+        eff_sy = result.scale_y * src_ry / ref_ry
+        eff_tx = result.tx / ref_rx
+        eff_ty = result.ty / ref_ry
+
+        result = AffineTransform(
+            frame_index=result.frame_index,
+            tx=eff_tx, ty=eff_ty,
+            rotation=result.rotation,
+            scale_x=eff_sx, scale_y=eff_sy,
+            shear=result.shear,
+            confidence=result.confidence,
+        )
+
+        # ref_res for to_flame_values is the segment ref resolution (not disk)
+        ref_res = (ref_seg_w, ref_seg_h) if ref_seg_w and ref_seg_h else None
         fv = to_flame_values(result, plate_res=plate_res, output_res=output_res, ref_res=ref_res)
 
         results.append({

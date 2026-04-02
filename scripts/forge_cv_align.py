@@ -48,15 +48,22 @@ def _resolve_forge_python():
         except Exception:
             pass
     # Fallback: try common conda locations
-    for candidate in [
-        os.path.expanduser("~/miniconda3/envs/forge/bin/python"),
-        os.path.expanduser("~/anaconda3/envs/forge/bin/python"),
-    ]:
-        if os.path.exists(candidate):
-            return candidate
-    return os.path.expanduser("~/miniconda3/envs/forge/bin/python")
+    for env_name in ("forge-cv", "forge"):
+        for base in ("~/miniconda3", "~/anaconda3"):
+            candidate = os.path.expanduser(f"{base}/envs/{env_name}/bin/python")
+            if os.path.exists(candidate):
+                return candidate
+    return os.path.expanduser("~/miniconda3/envs/forge-cv/bin/python")
 
 _FORGE_PYTHON = _resolve_forge_python()
+
+
+def _resolve_bin(name):
+    """Resolve a binary (e.g. ffprobe) from the same env as _FORGE_PYTHON."""
+    env_bin = os.path.join(os.path.dirname(_FORGE_PYTHON), name)
+    if os.path.exists(env_bin):
+        return env_bin
+    return name  # fall back to system PATH
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +620,7 @@ def _probe_container_fps(path):
         return None
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "0", "-select_streams", "v:0",
+            [_resolve_bin("ffprobe"), "-v", "0", "-select_streams", "v:0",
              "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", path],
             capture_output=True, timeout=10,
         )
@@ -737,9 +744,26 @@ def _apply_action_effect(source_seg, flame_values_list, temp_dir):
     if not os.path.exists(action_file):
         raise RuntimeError(f"save_setup did not create action file at {action_file}")
 
+    # Log baseline axis1 values
+    try:
+        with open(action_file) as _af:
+            baseline_text = _af.read()
+        import re as _re
+        for ch_name in ("position/x", "position/y", "scaling/x", "scaling/y"):
+            m = _re.search(
+                r'Channel\s+' + _re.escape(ch_name) + r'.*?Value\s+([\d\.\-e]+)',
+                baseline_text, _re.DOTALL)
+            val = m.group(1) if m else "?"
+            _log(f"  baseline {ch_name} = {val}")
+    except Exception as _e:
+        _log(f"  (could not read baseline: {_e})")
+
     # Build transforms list for subprocess
     transforms_data = []
     for fv in flame_values_list:
+        _log(f"  injecting: pos=({fv['position/x']:.2f}, {fv['position/y']:.2f}) "
+             f"scale=({fv['scaling/x']:.2f}, {fv['scaling/y']:.2f}) "
+             f"rot={fv['rotation/z']:.4f}")
         transforms_data.append({
             "frame_index": fv.get("frame_index", 1),
             "position_x": fv["position/x"],

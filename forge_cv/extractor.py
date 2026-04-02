@@ -10,8 +10,18 @@ from typing import List, Optional
 # Enable OpenEXR support in OpenCV before importing
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
+import sys
+
 import cv2
 import numpy as np
+
+
+def _resolve_bin(name: str) -> str:
+    """Resolve a binary from the same prefix as the running Python."""
+    env_bin = os.path.join(os.path.dirname(sys.executable), name)
+    if os.path.exists(env_bin):
+        return env_bin
+    return name  # fall back to system PATH
 
 
 def read_sequence_frame(path_pattern: str, frame_index: int) -> np.ndarray:
@@ -83,7 +93,7 @@ def extract_container_frame(
     try:
         seek_time = frame_index / fps
         cmd = [
-            "ffmpeg", "-y",
+            _resolve_bin("ffmpeg"), "-y",
             "-nostdin",
             "-ss", f"{seek_time:.6f}",
             "-i", container_path,
