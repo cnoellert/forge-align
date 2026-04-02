@@ -1,4 +1,4 @@
-"""CV alignment solver — SIFT keypoints, configurable transform model."""
+"""CV alignment solver — feature-based alignment with multiple detectors."""
 
 import math
 from typing import Optional, Tuple
@@ -12,7 +12,7 @@ from .types import AffineTransform
 MODES = ("similarity", "affine", "homography")
 
 # Valid detector types
-DETECTORS = ("sift", "akaze")
+DETECTORS = ("sift", "akaze", "superpoint")
 
 
 def solve_alignment(
@@ -34,13 +34,16 @@ def solve_alignment(
         frame_b: Source frame to align (float32 RGB, [0,1]).
         frame_index: Frame number for the result.
         max_features: Maximum features to detect (SIFT only; AKAZE uses threshold).
-        match_ratio: Lowe’s ratio test threshold.
+        match_ratio: Lowe’s ratio test threshold (SIFT/AKAZE only).
         ransac_thresh: RANSAC reprojection error threshold in pixels.
         mode: Transform model — "similarity", "affine", or "homography".
-        detector: Feature detector — "sift" or "akaze".
-            SIFT   — float L2 descriptors, reliable across a wide scale range.
-            AKAZE  — binary M-LDB descriptors, non-linear scale space; more
-                      robust on low-contrast and textureless regions.
+        detector: Feature detector — "sift", "akaze", or "superpoint".
+            SIFT       — float L2 descriptors, reliable across a wide scale range.
+            AKAZE      — binary M-LDB descriptors, non-linear scale space.
+            SuperPoint — learned detector + LightGlue matcher. Best for
+                          large scale gaps and cross-appearance matching
+                          (e.g. raw plate vs graded offline). Requires
+                          torch and lightglue packages.
         cs_a: Colourspace name for frame_a.
         cs_b: Colourspace name for frame_b.
 
@@ -52,13 +55,21 @@ def solve_alignment(
     if detector not in DETECTORS:
         raise ValueError(f"detector must be one of {DETECTORS}, got {detector!r}")
 
+    # Seed OpenCV RNG for deterministic RANSAC results
+    cv2.setRNGSeed(42)
+
     gray_a = _to_gray_uint8(frame_a, cs_a)
     gray_b = _to_gray_uint8(frame_b, cs_b)
 
-    # Build detector and matching norm
+    # SuperPoint+LightGlue: learned features, separate matching pipeline
+    if detector == "superpoint":
+        return _solve_superpoint(
+            gray_a, gray_b, frame_index, ransac_thresh, mode)
+
+    # OpenCV detectors: SIFT or AKAZE
     if detector == "akaze":
         det = cv2.AKAZE_create()
-        norm = cv2.NORM_HAMMING   # M-LDB binary descriptors
+        norm = cv2.NORM_HAMMING
     else:
         det = cv2.SIFT_create(nfeatures=max_features)
         norm = cv2.NORM_L2
@@ -72,7 +83,7 @@ def solve_alignment(
     bf = cv2.BFMatcher(norm)
     raw_matches = bf.knnMatch(desc_b, desc_a, k=2)
 
-    # Lowe's ratio test
+    # Lowe’s ratio test
     good = []
     for pair in raw_matches:
         if len(pair) == 2:
@@ -205,6 +216,63 @@ def decompose_homography(
         shear=shear,
         confidence=confidence,
     )
+
+
+# ---------------------------------------------------------------------------
+# SuperPoint + LightGlue
+# ---------------------------------------------------------------------------
+
+def _solve_superpoint(gray_a, gray_b, frame_index, ransac_thresh, mode):
+    """Learned feature matching via SuperPoint + LightGlue.
+
+    Much more robust than SIFT/AKAZE for large scale gaps and
+    cross-appearance pairs (raw plate vs graded offline).
+    """
+    try:
+        import torch
+        from lightglue import LightGlue, SuperPoint
+    except ImportError:
+        raise ImportError(
+            "SuperPoint detector requires torch and lightglue. "
+            "Install with: pip install torch lightglue"
+        )
+
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+
+    extractor = SuperPoint(max_num_keypoints=4096).eval().to(device)
+    matcher = LightGlue(features="superpoint").eval().to(device)
+
+    img_a = torch.from_numpy(gray_a).float()[None, None].to(device) / 255.0
+    img_b = torch.from_numpy(gray_b).float()[None, None].to(device) / 255.0
+
+    with torch.no_grad():
+        feats_a = extractor.extract(img_a)
+        feats_b = extractor.extract(img_b)
+        result = matcher({"image0": feats_a, "image1": feats_b})
+
+    kpts_a = feats_a["keypoints"][0].cpu().numpy()
+    kpts_b = feats_b["keypoints"][0].cpu().numpy()
+    matches = result["matches"][0].cpu().numpy()
+
+    if len(matches) < 4:
+        return _identity_transform(frame_index, confidence=0.0)
+
+    mkpts_a = kpts_a[matches[:, 0]]
+    mkpts_b = kpts_b[matches[:, 1]]
+
+    pts_b = mkpts_b.reshape(-1, 1, 2).astype(np.float32)
+    pts_a = mkpts_a.reshape(-1, 1, 2).astype(np.float32)
+    n_matches = len(matches)
+
+    # Wrap count in a list so _solve_* functions can use len() for confidence
+    match_list = [None] * n_matches
+
+    if mode == "similarity":
+        return _solve_similarity(pts_b, pts_a, match_list, frame_index, ransac_thresh)
+    elif mode == "affine":
+        return _solve_affine(pts_b, pts_a, match_list, frame_index, ransac_thresh)
+    else:
+        return _solve_homography(pts_b, pts_a, match_list, frame_index, ransac_thresh)
 
 
 # ---------------------------------------------------------------------------

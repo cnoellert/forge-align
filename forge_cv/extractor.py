@@ -54,16 +54,20 @@ def extract_container_frame(
     container_path: str,
     frame_index: int,
     temp_dir: Optional[str] = None,
+    fps: float = 23.976,
 ) -> np.ndarray:
     """Extract a single frame from a video container (MOV/MP4) via ffmpeg.
 
-    Uses ffmpeg select filter with integer frame index — no timecode needed.
+    Uses time-based seeking (-ss before -i) for fast random access.
+    ffmpeg seeks to the nearest keyframe then decodes forward to the
+    exact target PTS — frame-accurate for all codecs (ProRes, H.264,
+    H.265, etc.).
 
     Args:
         container_path: Path to the video file.
         frame_index: 0-based frame number to extract.
-        temp_dir: Optional temp directory for intermediate EXR. Uses system
-            temp if not provided.
+        temp_dir: Optional temp directory for intermediate PNG.
+        fps: Container frame rate (for converting frame index to seek time).
 
     Returns:
         Frame as float32 RGB array, shape (H, W, 3), range [0, 1].
@@ -77,11 +81,14 @@ def extract_container_frame(
 
     out_path = os.path.join(temp_dir, f"frame_{frame_index:06d}.png")
     try:
+        seek_time = frame_index / fps
         cmd = [
             "ffmpeg", "-y",
+            "-nostdin",
+            "-ss", f"{seek_time:.6f}",
             "-i", container_path,
-            "-vf", f"select=eq(n\\,{frame_index})",
             "-frames:v", "1",
+            "-vsync", "0",
             out_path,
         ]
         result = subprocess.run(
@@ -151,7 +158,7 @@ def _resolve_sequence_path(pattern: str, frame_index: int) -> str:
             pattern,
         )
 
-    # Literal path — try replacing the frame number first, fall back to as-is
+    # Literal path — replace the frame number in the filename
     dirname = os.path.dirname(pattern)
     basename = os.path.basename(pattern)
     # Match trailing number before extension: name.NNNN.ext
@@ -159,9 +166,7 @@ def _resolve_sequence_path(pattern: str, frame_index: int) -> str:
     if m:
         prefix, num_str, ext = m.groups()
         pad = len(num_str)
-        resolved = os.path.join(dirname, f"{prefix}{str(frame_index).zfill(pad)}{ext}")
-        if os.path.exists(resolved):
-            return resolved
+        return os.path.join(dirname, f"{prefix}{str(frame_index).zfill(pad)}{ext}")
 
     return pattern
 

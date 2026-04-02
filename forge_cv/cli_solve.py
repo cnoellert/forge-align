@@ -9,13 +9,13 @@ import os
 import sys
 
 
-def _read_ref_frame(ref_path, frame_idx):
+def _read_ref_frame(ref_path, frame_idx, fps=23.976):
     """Read a frame from the ref, dispatching container vs sequence."""
     from forge_cv.extractor import read_sequence_frame, extract_container_frame
 
     ext = os.path.splitext(ref_path)[1].lower()
     if ext in (".mp4", ".mov", ".mxf", ".avi"):
-        return extract_container_frame(ref_path, frame_idx)
+        return extract_container_frame(ref_path, frame_idx, fps=fps)
     else:
         return read_sequence_frame(ref_path, frame_idx)
 
@@ -39,11 +39,13 @@ def main():
     parser.add_argument("--mode", default="similarity",
                         choices=["similarity", "affine", "homography"])
     parser.add_argument("--detector", default="sift",
-                        choices=["sift", "akaze"])
+                        choices=["sift", "akaze", "superpoint"])
     parser.add_argument("--ref-width", type=int, default=0,
                         help="Native width of the ref frame")
     parser.add_argument("--ref-height", type=int, default=0,
                         help="Native height of the ref frame")
+    parser.add_argument("--ref-fps", type=float, default=23.976,
+                        help="Ref container frame rate (for seek-based extraction)")
     parser.add_argument("--source-cs", default="",
                         help="Source colourspace (e.g. ACEScg, ARRI LogC3)")
     parser.add_argument("--ref-cs", default="",
@@ -84,7 +86,7 @@ def main():
         source_frames, ref_frames, action_frames
     ):
         source_img = read_sequence_frame(args.source, src_frame)
-        ref_img = _read_ref_frame(args.ref, ref_frame)
+        ref_img = _read_ref_frame(args.ref, ref_frame, fps=args.ref_fps)
 
         result = solve_alignment(
             ref_img, source_img, frame_index=action_frame,

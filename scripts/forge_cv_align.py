@@ -172,6 +172,7 @@ def _cv_align_dispatch(selection):
                     source_seg, ref_seg, ref_info, ref_base,
                     out_w, out_h, detector, mode, solve_frames, every_n,
                     ref_fps_ratio=ref_fps_ratio,
+                    ref_fps=ref_fps or 23.976,
                 )
                 results_summary.append((source_name, result))
             except Exception:
@@ -290,7 +291,7 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 
     # ── Detector selector ──
     det_combo = QComboBox()
-    det_combo.addItems(["SIFT", "AKAZE"])
+    det_combo.addItems(["SIFT", "AKAZE", "SuperPoint"])
     det_combo.setCurrentIndex(0)
     layout.addLayout(_field_row("Detector", det_combo))
 
@@ -359,7 +360,7 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 
     frames_map = {0: "first", 1: "first_last", 2: "every_n"}
     mode_map = {0: "similarity", 1: "affine", 2: "homography"}
-    det_map  = {0: "sift", 1: "akaze"}
+    det_map  = {0: "sift", 1: "akaze", 2: "superpoint"}
 
     return {
         "ref_index":    ref_combo.currentIndex(),
@@ -376,7 +377,7 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 
 def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
                           out_w, out_h, detector, mode, solve_frames, every_n,
-                          ref_fps_ratio=1.0):
+                          ref_fps_ratio=1.0, ref_fps=23.976):
     """Align a single source segment to the reference. Returns summary dict."""
 
     source_info = _get_segment_info(source_seg)
@@ -472,6 +473,7 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
         source_frames, ref_frames,
         out_w, out_h, detector, mode,
         action_frames[0], action_frames[-1],
+        ref_fps=ref_fps,
     )
 
     if solve_result is None:
@@ -533,21 +535,30 @@ def _get_segment_info(seg):
 
     # Detect frame numbering offset between Flame's source_in and on-disk files.
     # Some clips (imported footage) have source_in matching disk frame numbers.
-    # Others (Flame-internal comps) have renumbered source_in — offset via start_frame.
+    # Others (Flame-internal comps) have renumbered source_in.
+    #
+    # file_path points to the first available media frame on disk.
+    # head = number of handle frames before source_in.
+    # So source_in on disk = first_disk_frame + head.
+    # frame_offset = source_in - (first_disk_frame + head)
     frame_offset = 0
     file_path = str(seg.file_path)
-    if hasattr(seg, 'start_frame'):
-        src_in = seg.source_in.frame
-        # Test if source_in resolves to an existing file
-        m = re.match(r'^(.*?)(\d+)(\.\w+)$', os.path.basename(file_path))
-        if m:
-            prefix, num_str, ext = m.groups()
-            pad = len(num_str)
-            dirname = os.path.dirname(file_path)
-            test_path = os.path.join(dirname, f"{prefix}{str(src_in).zfill(pad)}{ext}")
-            if not os.path.exists(test_path):
-                # source_in doesn't match disk — use start_frame offset
-                frame_offset = src_in - seg.start_frame
+    src_in = seg.source_in.frame
+    m = re.match(r'^(.*?)(\d+)(\.\w+)$', os.path.basename(file_path))
+    if m:
+        prefix, num_str, ext = m.groups()
+        pad = len(num_str)
+        dirname = os.path.dirname(file_path)
+        test_path = os.path.join(dirname, f"{prefix}{str(src_in).zfill(pad)}{ext}")
+        if not os.path.exists(test_path):
+            # source_in doesn't match disk — compute offset from file_path
+            # frame number and head handles
+            disk_first = int(num_str)
+            try:
+                head = int(seg.head)
+            except (ValueError, TypeError, OverflowError):
+                head = 0
+            frame_offset = src_in - (disk_first + head)
 
     # Get colourspace from Flame
     try:
@@ -620,7 +631,8 @@ def _probe_container_fps(path):
 # ---------------------------------------------------------------------------
 
 def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
-                  out_w, out_h, detector, mode, record_in=1, record_out=1):
+                  out_w, out_h, detector, mode, record_in=1, record_out=1,
+                  ref_fps=23.976):
     """Run the forge_cv alignment via subprocess."""
     import json
     import subprocess
@@ -641,6 +653,7 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
         "--record-out", str(record_out),
         "--detector", detector,
         "--mode", mode,
+        "--ref-fps", str(ref_fps),
         "--source-cs", source_info.get("colourspace", ""),
         "--ref-cs", ref_info.get("colourspace", ""),
     ]
