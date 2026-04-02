@@ -15,7 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 superpoint = [
     "torch>=2.0.0",
-    "lightglue>=0.1",
+    "lightglue @ git+https://github.com/cvg/LightGlue.git",
 ]
 
 [tool.setuptools.packages.find]

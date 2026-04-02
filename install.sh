@@ -128,7 +128,7 @@ if [[ "$DEPLOY_GLOBAL" == "yes" ]]; then
 fi
 
 # Add project paths if requested
-for pp in "${PROJECT_PATHS[@]+"${PROJECT_PATHS[@]}"}"; do
+for pp in ${PROJECT_PATHS[@]+"${PROJECT_PATHS[@]}"}; do
     # Resolve the setups/python directory
     SETUPS_DIR="$pp/setups"
     if [[ ! -d "$SETUPS_DIR" ]]; then
@@ -197,10 +197,13 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
         read -rp "  Install SuperPoint support? [y/N]: " INSTALL_SP
         if [[ "$INSTALL_SP" =~ ^[Yy]$ ]]; then
             info "Installing torch + lightglue (this may take a few minutes)..."
-            conda run -n "$ENV_NAME" pip install "torch>=2.0.0" "lightglue>=0.1" 2>&1 | tail -5
-            # lightglue pulls in opencv-python — remove it again
+            conda run -n "$ENV_NAME" pip install 'torch>=2.0.0' 'lightglue @ git+https://github.com/cvg/LightGlue.git' 2>&1 | tail -5
+            # lightglue pulls in opencv-python which replaces opencv-python-headless.
+            # Uninstalling opencv-python nukes the shared cv2 files, so headless
+            # must be force-reinstalled to restore them.
             if conda run -n "$ENV_NAME" pip show opencv-python &>/dev/null 2>&1; then
                 conda run -n "$ENV_NAME" pip uninstall opencv-python -y &>/dev/null
+                conda run -n "$ENV_NAME" pip install --force-reinstall opencv-python-headless &>/dev/null
             fi
             if conda run -n "$ENV_NAME" python -c "import torch; from lightglue import SuperPoint" 2>/dev/null; then
                 ok "SuperPoint installed"
@@ -239,7 +242,7 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
     ok "Conda Python: $CONDA_PYTHON"
 
     # ── Step 6: Interactive target selection (if none specified) ────
-    if [[ ${#DEPLOY_TARGETS[@]} -eq 0 && -z "$DEPLOY_GLOBAL" && ${#PROJECT_PATHS[@]+"${#PROJECT_PATHS[@]}"} -eq 0 ]]; then
+    if [[ ${#DEPLOY_TARGETS[@]} -eq 0 && -z "$DEPLOY_GLOBAL" && ${#PROJECT_PATHS[@]} -eq 0 ]]; then
         echo ""
         echo "  Hook will be deployed globally to: $SHARED_PYTHON_DIR"
         echo "  (Available to all Flame projects on this machine.)"
