@@ -390,9 +390,11 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
     source_info = _get_segment_info(source_seg)
     source_name = source_seg.name.get_value()
 
+    src_type = "container" if source_info.get("is_container") else "sequence"
+    fps_info = f", fps={source_info['container_fps']:.3f}" if source_info.get("container_fps") else ""
     _log(f"Source: {source_info['width']}x{source_info['height']} "
-         f"@ {source_info['file_path']} "
-         f"(frame_offset={source_info['frame_offset']}, "
+         f"[{src_type}] @ {source_info['file_path']} "
+         f"(frame_offset={source_info['frame_offset']}{fps_info}, "
          f"cs={source_info.get('colourspace', '?')})")
 
     rec_in = source_info["record_in_frame"]
@@ -532,6 +534,9 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
 # Segment info extraction
 # ---------------------------------------------------------------------------
 
+_CONTAINER_EXTS = frozenset(('.mov', '.mp4', '.mxf', '.avi', '.mkv'))
+
+
 def _get_segment_info(seg):
     """Extract media info from a segment."""
     timewarp = None
@@ -540,32 +545,46 @@ def _get_segment_info(seg):
             timewarp = e
             break
 
-    # Detect frame numbering offset between Flame's source_in and on-disk files.
-    # Some clips (imported footage) have source_in matching disk frame numbers.
-    # Others (Flame-internal comps) have renumbered source_in.
-    #
-    # file_path points to the first available media frame on disk.
-    # head = number of handle frames before source_in.
-    # So source_in on disk = first_disk_frame + head.
-    # frame_offset = source_in - (first_disk_frame + head)
-    frame_offset = 0
     file_path = str(seg.file_path)
     src_in = seg.source_in.frame
-    m = re.match(r'^(.*?)(\d+)(\.\w+)$', os.path.basename(file_path))
-    if m:
-        prefix, num_str, ext = m.groups()
-        pad = len(num_str)
-        dirname = os.path.dirname(file_path)
-        test_path = os.path.join(dirname, f"{prefix}{str(src_in).zfill(pad)}{ext}")
-        if not os.path.exists(test_path):
-            # source_in doesn't match disk — compute offset from file_path
-            # frame number and head handles
-            disk_first = int(num_str)
-            try:
-                head = int(seg.head)
-            except (ValueError, TypeError, OverflowError):
-                head = 0
-            frame_offset = src_in - (disk_first + head)
+    ext = os.path.splitext(file_path)[1].lower()
+    is_container = ext in _CONTAINER_EXTS
+
+    if is_container:
+        # Container media (ProRes MOV, MXF, etc.)
+        # head = handle frames before cut point in the container.
+        # source_in maps to container frame = head.
+        # frame_offset = source_in - head (so source_in - frame_offset = head = container frame)
+        try:
+            head = int(seg.head)
+        except (ValueError, TypeError, OverflowError):
+            head = 0
+        frame_offset = src_in - head
+
+        # Probe container fps for accurate seek-based extraction
+        container_fps = _probe_container_fps(file_path) or 23.976
+    else:
+        # Frame sequence (EXR, DPX, etc.)
+        # Detect frame numbering offset between Flame's source_in and on-disk files.
+        # file_path points to the first available media frame on disk.
+        # head = number of handle frames before source_in.
+        # So source_in on disk = first_disk_frame + head.
+        # frame_offset = source_in - (first_disk_frame + head)
+        frame_offset = 0
+        container_fps = 0.0
+        m = re.match(r'^(.*?)(\d+)(\.\w+)$', os.path.basename(file_path))
+        if m:
+            prefix, num_str, ext_str = m.groups()
+            pad = len(num_str)
+            dirname = os.path.dirname(file_path)
+            test_path = os.path.join(dirname, f"{prefix}{str(src_in).zfill(pad)}{ext_str}")
+            if not os.path.exists(test_path):
+                disk_first = int(num_str)
+                try:
+                    head = int(seg.head)
+                except (ValueError, TypeError, OverflowError):
+                    head = 0
+                frame_offset = src_in - (disk_first + head)
 
     # Get colourspace from Flame
     try:
@@ -582,6 +601,8 @@ def _get_segment_info(seg):
         "record_in_frame": seg.record_in.frame,
         "record_out_frame": seg.record_out.frame,
         "frame_offset": frame_offset,
+        "is_container": is_container,
+        "container_fps": container_fps,
         "timewarp": timewarp,
         "colourspace": colourspace,
     }
@@ -664,6 +685,11 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
         "--source-cs", source_info.get("colourspace", ""),
         "--ref-cs", ref_info.get("colourspace", ""),
     ]
+
+    # Pass source container fps for seek-based extraction
+    src_fps = source_info.get("container_fps", 0)
+    if src_fps:
+        cmd.extend(["--source-fps", str(src_fps)])
 
     _log(f"Subprocess: {' '.join(cmd)}")
 

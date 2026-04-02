@@ -9,15 +9,18 @@ import os
 import sys
 
 
-def _read_ref_frame(ref_path, frame_idx, fps=23.976):
-    """Read a frame from the ref, dispatching container vs sequence."""
+_CONTAINER_EXTS = frozenset((".mp4", ".mov", ".mxf", ".avi", ".mkv"))
+
+
+def _read_frame(path, frame_idx, fps=23.976):
+    """Read a frame, dispatching container vs image sequence by extension."""
     from forge_cv.extractor import read_sequence_frame, extract_container_frame
 
-    ext = os.path.splitext(ref_path)[1].lower()
-    if ext in (".mp4", ".mov", ".mxf", ".avi"):
-        return extract_container_frame(ref_path, frame_idx, fps=fps)
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _CONTAINER_EXTS:
+        return extract_container_frame(path, frame_idx, fps=fps)
     else:
-        return read_sequence_frame(ref_path, frame_idx)
+        return read_sequence_frame(path, frame_idx)
 
 
 def main():
@@ -46,6 +49,8 @@ def main():
                         help="Native height of the ref frame")
     parser.add_argument("--ref-fps", type=float, default=23.976,
                         help="Ref container frame rate (for seek-based extraction)")
+    parser.add_argument("--source-fps", type=float, default=0,
+                        help="Source container frame rate (for seek-based extraction)")
     parser.add_argument("--source-cs", default="",
                         help="Source colourspace (e.g. ACEScg, ARRI LogC3)")
     parser.add_argument("--ref-cs", default="",
@@ -62,7 +67,6 @@ def main():
     # Enable OpenEXR
     os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
-    from forge_cv.extractor import read_sequence_frame
     from forge_cv.solver import solve_alignment
     from forge_cv.action_writer import to_flame_values
 
@@ -86,8 +90,9 @@ def main():
     for src_frame, ref_frame, action_frame in zip(
         source_frames, ref_frames, action_frames
     ):
-        source_img = read_sequence_frame(args.source, src_frame)
-        ref_img = _read_ref_frame(args.ref, ref_frame, fps=args.ref_fps)
+        src_fps = args.source_fps if args.source_fps else 23.976
+        source_img = _read_frame(args.source, src_frame, fps=src_fps)
+        ref_img = _read_frame(args.ref, ref_frame, fps=args.ref_fps)
 
         # -----------------------------------------------------------------
         # Disk vs segment resolution correction.
