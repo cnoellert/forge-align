@@ -427,25 +427,36 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
     def _source_frame_at_record(rec_frame):
         """Get on-disk source frame for a given record position, respecting timewarp.
 
-        Flame has two timewarp modes with separate APIs:
-          - Speed mode:  get_speed_timing(frame) → source timing offset
-          - Timing mode: get_timing(frame) → source timing offset
-        We dispatch based on tw.mode.
+        Flame timewarp API takes 1-based segment-relative frames and returns
+        a source timing value — 1-based from the start of the full source clip
+        including handles.  For a segment with head=19:
+          get_timing(1) → 20.0  (edit point = head + 1)
+        For a frame-based TW set to frame 39:
+          get_timing(1) → 39.0
+
+        On-disk:
+          Sequences:  disk_frame = disk_first + (timing_val - 1)
+          Containers: container_frame = timing_val - 1
+        Unified:      disk_frame = src_first - head + (timing_val - 1) - frame_offset
         """
         if tw:
+            # Convert absolute record frame to 1-based segment-relative
+            seg_frame = float(rec_frame - rec_in + 1)
             tw_mode = tw.mode
             if tw_mode == "Timing":
-                timing_base = tw.get_timing(float(rec_in))
-                timing_at = tw.get_timing(float(rec_frame))
+                timing_val = tw.get_timing(seg_frame)
             else:
                 # Speed mode (default)
-                timing_base = tw.get_speed_timing(float(rec_in))
-                timing_at = tw.get_speed_timing(float(rec_frame))
-            flame_frame = int(round(src_first + (timing_at - timing_base)))
+                timing_val = tw.get_speed_timing(seg_frame)
+            # timing_val is 1-based from source start (including handles).
+            # src_first - frame_offset = disk_first + head (edit point on disk).
+            # Subtract head to get disk_first, then add timing_val - 1.
+            src_head = source_info["head"]
+            # Truncate (floor) — Flame blends fractional frames, we want the primary source frame
+            return int(src_first - src_head + (timing_val - 1.0) - frame_offset)
         else:
             flame_frame = src_first + (rec_frame - rec_in)
-        # Convert Flame-internal frame to on-disk frame number
-        return flame_frame - frame_offset
+            return flame_frame - frame_offset
 
     def _ref_frame_at_record(rec_frame):
         """Get ref container frame for a given record position.
@@ -562,15 +573,16 @@ def _get_segment_info(seg):
     ext = os.path.splitext(file_path)[1].lower()
     is_container = ext in _CONTAINER_EXTS
 
+    try:
+        head = int(seg.head)
+    except (ValueError, TypeError, OverflowError):
+        head = 0
+
     if is_container:
         # Container media (ProRes MOV, MXF, etc.)
         # head = handle frames before cut point in the container.
         # source_in maps to container frame = head.
         # frame_offset = source_in - head (so source_in - frame_offset = head = container frame)
-        try:
-            head = int(seg.head)
-        except (ValueError, TypeError, OverflowError):
-            head = 0
         frame_offset = src_in - head
 
         # Probe container fps for accurate seek-based extraction
@@ -592,10 +604,6 @@ def _get_segment_info(seg):
             test_path = os.path.join(dirname, f"{prefix}{str(src_in).zfill(pad)}{ext_str}")
             if not os.path.exists(test_path):
                 disk_first = int(num_str)
-                try:
-                    head = int(seg.head)
-                except (ValueError, TypeError, OverflowError):
-                    head = 0
                 frame_offset = src_in - (disk_first + head)
 
     # Get colourspace from Flame
@@ -613,6 +621,7 @@ def _get_segment_info(seg):
         "record_in_frame": seg.record_in.frame,
         "record_out_frame": seg.record_out.frame,
         "frame_offset": frame_offset,
+        "head": head,
         "is_container": is_container,
         "container_fps": container_fps,
         "timewarp": timewarp,

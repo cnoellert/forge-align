@@ -197,7 +197,7 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
         read -rp "  Install SuperPoint support? [y/N]: " INSTALL_SP
         if [[ "$INSTALL_SP" =~ ^[Yy]$ ]]; then
             info "Installing torch + lightglue (this may take a few minutes)..."
-            conda run -n "$ENV_NAME" pip install -e "$SCRIPT_DIR[superpoint]" 2>&1 | tail -5
+            conda run -n "$ENV_NAME" pip install "torch>=2.0.0" "lightglue>=0.1" 2>&1 | tail -5
             # lightglue pulls in opencv-python — remove it again
             if conda run -n "$ENV_NAME" pip show opencv-python &>/dev/null 2>&1; then
                 conda run -n "$ENV_NAME" pip uninstall opencv-python -y &>/dev/null
