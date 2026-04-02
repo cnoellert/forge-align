@@ -397,6 +397,13 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
          f"(frame_offset={source_info['frame_offset']}{fps_info}, "
          f"cs={source_info.get('colourspace', '?')})")
 
+    # Camera raw formats can't be decoded outside Flame — skip with guidance
+    ext = os.path.splitext(source_info["file_path"])[1].lower()
+    if ext in _RAW_EXTS:
+        _log(f"Skipping {source_name}: camera raw format ({ext}) — "
+             f"use graded or comp version on another track")
+        return f"Skipped (raw format {ext} — use graded/comp track)"
+
     rec_in = source_info["record_in_frame"]
     rec_out = source_info["record_out_frame"]
     seg_duration = rec_out - rec_in + 1
@@ -535,6 +542,11 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
 # ---------------------------------------------------------------------------
 
 _CONTAINER_EXTS = frozenset(('.mov', '.mp4', '.mxf', '.avi', '.mkv'))
+
+# Camera raw formats that require vendor SDKs or Flame/Wiretap to decode.
+# ffmpeg and OpenCV cannot read these. Skip with a message directing the
+# user to use the graded/comp version on another track instead.
+_RAW_EXTS = frozenset(('.arx', '.ari', '.r3d', '.braw', '.dng', '.nef', '.cr2', '.cr3'))
 
 
 def _get_segment_info(seg):
