@@ -589,22 +589,19 @@ def _get_segment_info(seg):
         container_fps = _probe_container_fps(file_path) or 23.976
     else:
         # Frame sequence (EXR, DPX, etc.)
-        # Detect frame numbering offset between Flame's source_in and on-disk files.
         # file_path points to the first available media frame on disk.
         # head = number of handle frames before source_in.
-        # So source_in on disk = first_disk_frame + head.
         # frame_offset = source_in - (first_disk_frame + head)
+        # Always compute from disk_first + head — the old os.path.exists
+        # shortcut (frame_offset=0 when src_in matches a disk frame) breaks
+        # timewarp calculations that depend on head being correct relative
+        # to frame_offset.
         frame_offset = 0
         container_fps = 0.0
         m = re.match(r'^(.*?)(\d+)(\.\w+)$', os.path.basename(file_path))
         if m:
-            prefix, num_str, ext_str = m.groups()
-            pad = len(num_str)
-            dirname = os.path.dirname(file_path)
-            test_path = os.path.join(dirname, f"{prefix}{str(src_in).zfill(pad)}{ext_str}")
-            if not os.path.exists(test_path):
-                disk_first = int(num_str)
-                frame_offset = src_in - (disk_first + head)
+            disk_first = int(m.group(2))
+            frame_offset = src_in - (disk_first + head)
 
     # Get colourspace from Flame
     try:

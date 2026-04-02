@@ -292,18 +292,15 @@ def _get_segment_info(seg):
     import re
     frame_offset = 0
     file_path = str(seg.file_path)
-    if hasattr(seg, "start_frame"):
-        src_in = seg.source_in.frame
-        m = re.match(r'^(.*?)(\d+)(\.\w+)$', os.path.basename(file_path))
-        if m:
-            prefix, num_str, ext = m.groups()
-            pad = len(num_str)
-            test_path = os.path.join(
-                os.path.dirname(file_path),
-                f"{prefix}{str(src_in).zfill(pad)}{ext}"
-            )
-            if not os.path.exists(test_path):
-                frame_offset = src_in - seg.start_frame
+    src_in = seg.source_in.frame
+    m = re.match(r'^(.*?)(\d+)(\.\w+)$', os.path.basename(file_path))
+    if m:
+        disk_first = int(m.group(2))
+        try:
+            _head = int(seg.head)
+        except (ValueError, TypeError, OverflowError):
+            _head = 0
+        frame_offset = src_in - (disk_first + _head)
 
     try:
         head = int(seg.head)
