@@ -143,6 +143,7 @@ def _cv_align_dispatch(selection):
         mode = settings["mode"]
         solve_frames = settings["solve_frames"]
         every_n = settings["every_n"]
+        round_half = settings["round_half"]
 
         ref_name = ref_seg.name.get_value()
 
@@ -151,7 +152,7 @@ def _cv_align_dispatch(selection):
         out_w = seq.width
         out_h = seq.height
         ref_info = _get_segment_info(ref_seg)
-        ref_base = _compute_ref_base(ref_seg)
+        ref_base = _compute_ref_base(ref_info)
 
         # FPS ratio: converts timeline frame offset → container frame index.
         # Ratio = 1.0 when fps matches (the common case) — no-op.
@@ -180,6 +181,7 @@ def _cv_align_dispatch(selection):
                     out_w, out_h, detector, mode, solve_frames, every_n,
                     ref_fps_ratio=ref_fps_ratio,
                     ref_fps=ref_fps or 23.976,
+                    round_half=round_half,
                 )
                 results_summary.append((source_name, result))
             except Exception:
@@ -327,6 +329,14 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 
     frames_combo.currentIndexChanged.connect(_on_frames_changed)
 
+    # ── Round to 0.5 checkbox ──
+    from PySide6.QtWidgets import QCheckBox
+    round_cb = QCheckBox("Round values to nearest 0.5")
+    round_cb.setChecked(False)
+    round_cb.setStyleSheet("QCheckBox { color: #ccc; font-size: 12px; }"
+                           "QCheckBox::indicator { width: 14px; height: 14px; }")
+    layout.addWidget(round_cb)
+
     # ── Separator ──
     sep2 = QFrame()
     sep2.setFrameShape(QFrame.HLine)
@@ -375,6 +385,7 @@ def _show_cv_align_dialog(segments, default_ref_idx):
         "mode":         mode_map[mode_combo.currentIndex()],
         "solve_frames": frames_map[frames_combo.currentIndex()],
         "every_n":      n_spin.value() if frames_combo.currentIndex() == 2 else 1,
+        "round_half":   round_cb.isChecked(),
     }
 
 
@@ -384,7 +395,7 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 
 def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
                           out_w, out_h, detector, mode, solve_frames, every_n,
-                          ref_fps_ratio=1.0, ref_fps=23.976):
+                          ref_fps_ratio=1.0, ref_fps=23.976, round_half=False):
     """Align a single source segment to the reference. Returns summary dict."""
 
     source_info = _get_segment_info(source_seg)
@@ -533,6 +544,14 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
             "shearing/x": r["shearing_x"],
         })
 
+    # Round to nearest 0.5 if requested
+    if round_half:
+        _round_keys = ("position/x", "position/y", "rotation/z",
+                       "scaling/x", "scaling/y", "shearing/x")
+        for fv in flame_values_list:
+            for k in _round_keys:
+                fv[k] = round(fv[k] * 2.0) / 2.0
+
     # Apply Action effect — unique temp dir per segment to avoid stale data
     temp_dir = tempfile.mkdtemp(prefix="forge_cv_align_")
 
@@ -626,17 +645,16 @@ def _get_segment_info(seg):
     }
 
 
-def _compute_ref_base(ref_seg):
-    """Compute the container frame offset for the ref's record_in.
+def _compute_ref_base(ref_info):
+    """Compute the on-disk frame for the ref's record_in (edit point).
 
-    head is the number of handle frames in the container before the
-    segment's edit in-point.  For a clean import with no pre-roll this
-    is 0, meaning container frame 0 = record_in.
-
-    NOTE: source_in.frame is NOT a container frame index — it is Flame's
-    internal absolute frame number and must not be used here.
+    For containers: container frame = head (0-based from file start).
+    For sequences:  disk frame = source_in - frame_offset (edit point on disk).
     """
-    return ref_seg.head if hasattr(ref_seg, 'head') else 0
+    if ref_info["is_container"]:
+        return ref_info["head"]
+    else:
+        return ref_info["source_in_frame"] - ref_info["frame_offset"]
 
 
 def _parse_flame_fps(fps_str):
