@@ -1,6 +1,6 @@
 # forge-align
 
-Computer vision alignment tool for Autodesk Flame. Matches plate segments to a reference using SIFT feature detection and creates Action effects with scale/position/rotation keyframes.
+Computer vision alignment tool for Autodesk Flame. Matches plate segments to a reference using feature detection and creates Action effects with scale/position/rotation keyframes.
 
 ## Demo
 
@@ -10,12 +10,15 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 
 - **Auto-detect** plate vs reference by resolution
 - **Multi-segment batch** — select many plates + one ref, aligns all
-- **Timewarp-aware** — correct source frame mapping for Speed and Frame mode timewarps
+- **Three detectors** — SIFT (default), AKAZE, SuperPoint+LightGlue
+- **Timewarp-aware** — correct source frame mapping for Speed and Timing (Frame) mode timewarps
 - **Colourspace-aware** — reads colourspace from Flame (ACEScg, ARRI LogC3, Rec.709, etc.) and applies the correct transfer function for feature detection
+- **Container + sequence sources** — EXR/DPX frame sequences and ProRes MOV/MXF containers
 - **Three solve modes** — Similarity (4 DOF), Affine (6 DOF), Homography (8 DOF)
 - **Frame sampling** — First frame, First + Last, or Every N frames
+- **Round to 0.5** — optional rounding for cleaner manual tweaking
 - **Confidence gate** — skips low-quality matches automatically
-- **PySide settings dialog** — ref selector, mode, frame sampling in one place
+- **PySide settings dialog** — ref selector, detector, mode, frame sampling, rounding in one place
 
 ## Requirements
 
@@ -34,23 +37,31 @@ bash install.sh
 The installer will:
 1. Create (or reuse) a conda environment with Python 3.11
 2. Install OpenCV and NumPy
-3. Check for ffmpeg
-4. Save the conda Python path to `~/.forge/config.yaml`
-5. Deploy the hook — you choose: all projects or a single project
+3. Optionally install SuperPoint support (torch + lightglue, ~2 GB)
+4. Install ffmpeg via conda-forge
+5. Save the conda Python path to `~/.forge/config.yaml`
+6. Deploy the hook globally (default) or to a custom path
 
 You can also specify options directly:
 ```bash
-# Install hook for all Flame projects
-bash install.sh --global
+# Install with all defaults (interactive prompts)
+bash install.sh
 
-# Install hook for a specific project
-bash install.sh --project /mnt/server/projects/my_project
+# Deploy to a specific project in addition to global
+bash install.sh --global --project /mnt/server/projects/my_project
 
 # Specify conda env name
-bash install.sh --env myenv --global
+bash install.sh --env myenv
+
+# Fast redeploy (skip env/pip setup)
+bash install.sh --deploy-only
 ```
 
-After install, rescan Python Hooks in Flame (or restart).
+After install, restart Flame or evict the cached module:
+```python
+import sys; [sys.modules.pop(k) for k in list(sys.modules) if 'forge_cv_align' in k]
+# Then: Rescan Python Hooks
+```
 
 ## Uninstall
 
@@ -84,14 +95,26 @@ The hook reads each segment's colourspace from Flame via `get_colour_space()` an
 
 This ensures SIFT gets usable contrast regardless of whether the source is linear EXR, log-encoded camera footage, or an sRGB offline reference.
 
+## Detectors
+
+| Detector | Best for | Notes |
+|---|---|---|
+| **SIFT** (default) | Most cases — robust, high confidence | No extra deps |
+| **AKAZE** | Matched-resolution, low-contrast shots | No extra deps, binary descriptors |
+| **SuperPoint** | Large scale gaps, cross-appearance matching | Requires torch + lightglue (~2 GB), optional install |
+
 ## Timewarp Support
 
-The hook detects timewarps on source segments and maps record frames to source frames using the correct Flame API:
+The hook detects timewarps on source segments and maps record frames to source frames using the correct Flame API. Both methods take 1-based segment-relative frames and return timing values 1-based from source start including handles.
 
 - **Speed mode** — `get_speed_timing()` for source frame lookup
 - **Timing (Frame) mode** — `get_timing()` for source frame lookup
 
-Segments without timewarps use a direct record-to-source offset.
+```
+disk_frame = int(src_in - head + (timing_val - 1) - frame_offset)
+```
+
+Flame floors fractional timing values (`int()` not `round()`). Segments without timewarps use a direct record-to-source offset.
 
 ## How It Works
 
@@ -101,8 +124,9 @@ The hook runs inside Flame's Python environment. The actual CV solve runs in a s
 Flame Python (hook)
   → read segment colourspace, timewarp mode, frame mapping
   → subprocess → conda Python (forge_cv)
-    → SIFT feature matching (colourspace-corrected grayscale)
+    → feature matching (SIFT/AKAZE/SuperPoint, colourspace-corrected grayscale)
     → geometric solve (similarity/affine/homography)
+    → optional round-to-0.5
     → Action keyframe values
   ← JSON result
 Flame Python (hook)
@@ -113,7 +137,8 @@ Flame Python (hook)
 ## Troubleshooting
 
 - **Log file:** `/tmp/forge_cv_align.log` — contains frame numbers, subprocess commands, and errors
-- **"No match"** — SIFT couldn't find enough features. Try Affine or Homography mode. Images with very little texture (solid backgrounds, heavy motion blur) may not match.
+- **"No match"** — the detector couldn't find enough features. Try a different detector (SuperPoint for large scale gaps), or Affine/Homography mode. Images with very little texture (solid backgrounds, heavy motion blur) may not match.
+- **Camera raw formats** (ARX, R3D, BRAW) — cannot be read outside Flame. Use the graded or comp version on another track instead.
 - **Timewarp error** — if you see `RuntimeError: This method is only available when using the Speed/Timing mode`, the hook may need to be updated. Pull the latest and redeploy.
 - **ffmpeg errors** — ensure ffmpeg is installed and accessible. Required for MP4/MOV reference extraction.
 - **Wrong conda Python** — check `~/.forge/config.yaml` points to the correct Python path. Re-run `bash install.sh` to update.
