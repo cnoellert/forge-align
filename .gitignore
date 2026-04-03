@@ -4,3 +4,8 @@ __pycache__/
 dist/
 build/
 .eggs/
+
+# Temporal matching (WIP — not ready for release)
+forge_cv/cli_temporal.py
+forge_cv/temporal_solver.py
+forge_cv/timewarp_writer.py
