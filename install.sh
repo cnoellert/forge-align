@@ -244,11 +244,15 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
     # ── Step 6: Interactive target selection (if none specified) ────
     if [[ ${#DEPLOY_TARGETS[@]} -eq 0 && -z "$DEPLOY_GLOBAL" && ${#PROJECT_PATHS[@]} -eq 0 ]]; then
         echo ""
-        echo "  Hook will be deployed globally to: $SHARED_PYTHON_DIR"
-        echo "  (Available to all Flame projects on this machine.)"
+        read -rp "  Deploy globally? [Y/n]: " DEPLOY_GLOBAL_YN
+        if [[ ! "$DEPLOY_GLOBAL_YN" =~ ^[Nn]$ ]]; then
+            read -rp "  Deploy path [$SHARED_PYTHON_DIR]: " CUSTOM_SHARED
+            CUSTOM_SHARED="${CUSTOM_SHARED:-$SHARED_PYTHON_DIR}"
+            DEPLOY_TARGETS+=("$CUSTOM_SHARED/$HOOK_NAME")
+        fi
+
         echo ""
         read -rp "  Also deploy to a specific project? [y/N]: " ADD_PROJECT
-        DEPLOY_TARGETS+=("$SHARED_PYTHON_DIR/$HOOK_NAME")
         if [[ "$ADD_PROJECT" =~ ^[Yy]$ ]]; then
             read -rp "  Flame project path (e.g. /mnt/server/projects/myproject): " PP
             SD="$PP/setups"
