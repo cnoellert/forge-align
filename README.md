@@ -76,7 +76,7 @@ Removes the hook, pip package, and config. Optionally removes the conda environm
 
 1. Open a timeline in Flame
 2. Select 2 or more segments (plates + reference)
-3. Right-click → **FORGE → CV Align → CV Align**
+3. Right-click → **FORGE → Transforms → CV Align**
 4. In the dialog: confirm reference, choose solve mode and frame sampling
 5. Click **Align**
 

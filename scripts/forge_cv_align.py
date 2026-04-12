@@ -1,6 +1,6 @@
 """FORGE CV Align — align plate segments to a reference using computer vision.
 
-Flame timeline hook: right-click segments → FORGE → CV Align.
+Flame timeline hook: right-click segments → FORGE → Transforms → CV Align.
 Select one or more source plates + one reference (auto-detected by resolution).
 Creates Action effects with scale/position/rotation keyframes.
 """
@@ -78,13 +78,12 @@ def get_timeline_custom_ui_actions():
             "actions": [],
         },
         {
-            "name": "CV Align",
+            "name": "Transforms",
             "hierarchy": ["FORGE"],
-            "order": 5,
             "actions": [
                 {
                     "name": "CV Align",
-                    "order": 0,
+                    "order": 2,
                     "isVisible": _scope_cv_align,
                     "execute": _cv_align_dispatch,
                     "minimumVersion": "2025",
