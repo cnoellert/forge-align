@@ -12,15 +12,14 @@ import sys
 _CONTAINER_EXTS = frozenset((".mp4", ".mov", ".mxf", ".avi", ".mkv"))
 
 
-def _read_frame(path, frame_idx, fps=23.976):
+def _read_frame(path, frame_idx, fps=23.976, *, assume_source: str | None = None):
     """Read a frame, dispatching container vs image sequence by extension."""
     from forge_cv.extractor import read_sequence_frame, extract_container_frame
 
     ext = os.path.splitext(path)[1].lower()
     if ext in _CONTAINER_EXTS:
-        return extract_container_frame(path, frame_idx, fps=fps)
-    else:
-        return read_sequence_frame(path, frame_idx)
+        return extract_container_frame(path, frame_idx, fps=fps, assume_source=assume_source)
+    return read_sequence_frame(path, frame_idx, assume_source=assume_source)
 
 
 def main():
@@ -64,9 +63,6 @@ def main():
         print(json.dumps({"error": "source-frames and ref-frames must have same count"}))
         sys.exit(1)
 
-    # Enable OpenEXR
-    os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
-
     from forge_cv.solver import solve_alignment
     from forge_cv.action_writer import to_flame_values
 
@@ -91,8 +87,18 @@ def main():
         source_frames, ref_frames, action_frames
     ):
         src_fps = args.source_fps if args.source_fps else 23.976
-        source_img = _read_frame(args.source, src_frame, fps=src_fps)
-        ref_img = _read_frame(args.ref, ref_frame, fps=args.ref_fps)
+        source_img = _read_frame(
+            args.source,
+            src_frame,
+            fps=src_fps,
+            assume_source=args.source_cs or None,
+        )
+        ref_img = _read_frame(
+            args.ref,
+            ref_frame,
+            fps=args.ref_fps,
+            assume_source=args.ref_cs or None,
+        )
 
         # -----------------------------------------------------------------
         # Disk vs segment resolution correction.

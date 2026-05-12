@@ -12,7 +12,7 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 - **Multi-segment batch** — select many plates + one ref, aligns all
 - **Three detectors** — SIFT (default), AKAZE, SuperPoint+LightGlue
 - **Timewarp-aware** — correct source frame mapping for Speed and Timing (Frame) mode timewarps
-- **Colourspace-aware** — reads colourspace from Flame (ACEScg, ARRI LogC3, Rec.709, etc.) and applies the correct transfer function for feature detection
+- **Colourspace-aware** — sequence frames are read through **forge-io** (OpenImageIO + OpenColorIO): defaults map to **`sRGB`** for feature detection; pass **`--source-cs` / `--ref-cs`** so unknown file colorspaces resolve via OCIO `assume_source`. Set the **`OCIO`** environment (or extend the CLI later with an explicit config path) to match your facility config.
 - **Container + sequence sources** — EXR/DPX frame sequences and ProRes MOV/MXF containers
 - **Three solve modes** — Similarity (4 DOF), Affine (6 DOF), Homography (8 DOF)
 - **Frame sampling** — First frame, First + Last, or Every N frames
@@ -25,6 +25,7 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 - Autodesk Flame 2025+
 - Miniconda or Anaconda
 - ffmpeg (for MP4/MOV reference extraction)
+- **OpenImageIO + OpenColorIO** (pulled in by the **forge-io** dependency; Conda/ASWF-style stacks satisfy them). For plate/reference **sequences**, the solver expects a usable **`OCIO`** config (see forge-io `read(..., working_space=\"sRGB\")`).
 
 ## Install
 
@@ -36,7 +37,7 @@ bash install.sh
 
 The installer will:
 1. Create (or reuse) a conda environment with Python 3.11
-2. Install OpenCV and NumPy
+2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.1.0` — push tags to GitHub before installing on a fresh machine)
 3. Optionally install SuperPoint support (torch + lightglue, ~2 GB)
 4. Install ffmpeg via conda-forge
 5. Save the conda Python path to `~/.forge/config.yaml`

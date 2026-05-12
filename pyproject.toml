@@ -6,10 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "forge-align"
 version = "1.0.0"
 description = "FORGE CV Align — computer vision alignment for Autodesk Flame"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "opencv-python-headless>=4.8.0",
     "numpy>=1.24.0",
+    "forge-io @ git+https://github.com/cnoellert/forge-io.git@v0.1.0",
 ]
 
 [project.optional-dependencies]

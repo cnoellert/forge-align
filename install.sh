@@ -170,6 +170,10 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
 
     # ── Step 2: Install forge_cv package ───────────────────────────
     echo ""
+    info "Installing OpenImageIO + OpenColorIO (forge-io runtime)..."
+    conda install -n "$ENV_NAME" -c conda-forge openimageio opencolorio -y 2>&1 | tail -3
+    ok "OIIO + OCIO available in env"
+
     info "Installing forge_cv and CV dependencies..."
     conda run -n "$ENV_NAME" pip install -e "$SCRIPT_DIR" 2>&1 | tail -3
     ok "forge-align installed"
@@ -216,8 +220,8 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
     fi
 
     # ── Step 3: Verify import ──────────────────────────────────────
-    if conda run -n "$ENV_NAME" python -c "from forge_cv.solver import solve_alignment" 2>/dev/null; then
-        ok "forge_cv imports OK"
+    if conda run -n "$ENV_NAME" python -c "import forge_io; from forge_cv.solver import solve_alignment" 2>/dev/null; then
+        ok "forge_io + forge_cv imports OK"
     else
         warn "forge_cv import check failed — check install output above"
     fi
