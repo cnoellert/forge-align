@@ -64,6 +64,32 @@ import sys; [sys.modules.pop(k) for k in list(sys.modules) if 'forge_cv_align' i
 # Then: Rescan Python Hooks
 ```
 
+## Validation
+
+Quick **forge-io** read smoke (uses `read_frame` the same way the solver path does). Requires a generated or production plate and a Python env where **forge-io** + **OpenImageIO** import (e.g. the `forge` conda env after `install.sh`).
+
+**Decode only** (no OCIO; good for a tiny EXR after you run `python tests/fixtures/generate_fixtures.py` in the **forge-io** repo):
+
+```bash
+python scripts/smoke_v0_1_1.py \
+  --plate /absolute/path/to/forge-io/tests/fixtures/solid_rgb.exr \
+  --frame 1 \
+  --no-ocio
+```
+
+**With OCIO** (default working space name is passed through; set `OCIO` to your facility config first):
+
+```bash
+export OCIO=/absolute/path/to/config.ocio
+python scripts/smoke_v0_1_1.py \
+  --plate "/shots/plate.[0001-1000].exr" \
+  --frame 42 \
+  --working-space sRGB \
+  --source-cs ACEScg
+```
+
+Exit code **0** on success; **1** on failure, with the error on stderr.
+
 ## Uninstall
 
 ```bash
