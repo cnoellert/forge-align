@@ -168,6 +168,9 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
         ok "Conda environment '$ENV_NAME' exists"
     fi
 
+    CONDA_BASE="$(conda info --base)"
+    ENV_BIN="${CONDA_BASE}/envs/${ENV_NAME}/bin"
+
     # ── Step 2: Install forge_cv package ───────────────────────────
     echo ""
     info "Installing OpenImageIO + OpenColorIO (forge-io runtime)..."
@@ -178,27 +181,27 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
         ok "OIIO + OCIO installed from conda-forge"
     else
         warn "conda-forge OIIO/OCIO install failed (common on osx-arm64); falling back to PyPI"
-        conda run -n "$ENV_NAME" pip install OpenImageIO opencolorio
+        "$ENV_BIN/pip" install OpenImageIO opencolorio
         ok "OIIO + OCIO installed from PyPI"
     fi
 
     info "Installing forge_cv and CV dependencies..."
-    conda run -n "$ENV_NAME" pip install -e "$SCRIPT_DIR" 2>&1 | tail -3
+    "$ENV_BIN/pip" install -e "$SCRIPT_DIR" 2>&1 | tail -3
     ok "forge-align installed"
 
     # ── Step 2b: Fix opencv-python conflict ────────────────────────
     # lightglue (if installed) pulls in opencv-python which conflicts
     # with our opencv-python-headless. Remove the non-headless variant.
-    if conda run -n "$ENV_NAME" pip show opencv-python &>/dev/null 2>&1; then
+    if "$ENV_BIN/pip" show opencv-python &>/dev/null 2>&1; then
         warn "opencv-python conflicts with opencv-python-headless — removing"
-        conda run -n "$ENV_NAME" pip uninstall opencv-python -y 2>&1 | tail -1
+        "$ENV_BIN/pip" uninstall opencv-python -y 2>&1 | tail -1
         ok "opencv-python removed (headless variant retained)"
     fi
 
     # ── Step 2c: Optional SuperPoint deps ─────────────────────────
     # torch + lightglue enable the SuperPoint detector (best for large
     # scale gaps and cross-appearance matching). ~2 GB download.
-    if conda run -n "$ENV_NAME" python -c "import torch; from lightglue import SuperPoint" 2>/dev/null; then
+    if "$ENV_BIN/python" -c "import torch; from lightglue import SuperPoint" 2>/dev/null; then
         ok "SuperPoint deps already installed (torch + lightglue)"
     else
         echo ""
@@ -209,15 +212,15 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
         read -rp "  Install SuperPoint support? [y/N]: " INSTALL_SP
         if [[ "$INSTALL_SP" =~ ^[Yy]$ ]]; then
             info "Installing torch + lightglue (this may take a few minutes)..."
-            conda run -n "$ENV_NAME" pip install 'torch>=2.0.0' 'lightglue @ git+https://github.com/cvg/LightGlue.git' 2>&1 | tail -5
+            "$ENV_BIN/pip" install 'torch>=2.0.0' 'lightglue @ git+https://github.com/cvg/LightGlue.git' 2>&1 | tail -5
             # lightglue pulls in opencv-python which replaces opencv-python-headless.
             # Uninstalling opencv-python nukes the shared cv2 files, so headless
             # must be force-reinstalled to restore them.
-            if conda run -n "$ENV_NAME" pip show opencv-python &>/dev/null 2>&1; then
-                conda run -n "$ENV_NAME" pip uninstall opencv-python -y &>/dev/null
-                conda run -n "$ENV_NAME" pip install --force-reinstall opencv-python-headless &>/dev/null
+            if "$ENV_BIN/pip" show opencv-python &>/dev/null 2>&1; then
+                "$ENV_BIN/pip" uninstall opencv-python -y &>/dev/null
+                "$ENV_BIN/pip" install --force-reinstall opencv-python-headless &>/dev/null
             fi
-            if conda run -n "$ENV_NAME" python -c "import torch; from lightglue import SuperPoint" 2>/dev/null; then
+            if "$ENV_BIN/python" -c "import torch; from lightglue import SuperPoint" 2>/dev/null; then
                 ok "SuperPoint installed"
             else
                 warn "SuperPoint install failed — SIFT/AKAZE still available"
@@ -228,7 +231,7 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
     fi
 
     # ── Step 3: Verify import ──────────────────────────────────────
-    if conda run -n "$ENV_NAME" python -c "import forge_io; from forge_cv.solver import solve_alignment" 2>/dev/null; then
+    if "$ENV_BIN/python" -c "import forge_io; from forge_cv.solver import solve_alignment" 2>/dev/null; then
         ok "forge_io + forge_cv imports OK"
     else
         warn "forge_cv import check failed — check install output above"
@@ -236,12 +239,12 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
 
     # ── Step 4: Install ffmpeg (via conda, into the env) ─────────
     echo ""
-    if conda run -n "$ENV_NAME" ffmpeg -version &>/dev/null 2>&1; then
+    if "$ENV_BIN/ffmpeg" -version &>/dev/null 2>&1; then
         ok "ffmpeg found in env"
     else
         info "Installing ffmpeg into '$ENV_NAME'..."
         conda install -n "$ENV_NAME" -c conda-forge ffmpeg -y 2>&1 | tail -3
-        if conda run -n "$ENV_NAME" ffmpeg -version &>/dev/null 2>&1; then
+        if "$ENV_BIN/ffmpeg" -version &>/dev/null 2>&1; then
             ok "ffmpeg installed"
         else
             warn "ffmpeg install failed — MOV/MP4 reference extraction won't work"
@@ -250,7 +253,7 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
     fi
 
     # ── Step 5: Save conda python path ─────────────────────────────
-    CONDA_PYTHON=$(conda run -n "$ENV_NAME" python -c "import sys; print(sys.executable)")
+    CONDA_PYTHON=$("$ENV_BIN/python" -c "import sys; print(sys.executable)")
     ok "Conda Python: $CONDA_PYTHON"
 
     # ── Step 6: Interactive target selection (if none specified) ────
