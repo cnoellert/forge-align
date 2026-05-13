@@ -37,7 +37,7 @@ bash install.sh
 
 The installer will:
 1. Create (or reuse) a conda environment with Python 3.11
-2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.1.0` — push tags to GitHub before installing on a fresh machine)
+2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.2.0` — push tags to GitHub before installing on a fresh machine)
 3. Optionally install SuperPoint support (torch + lightglue, ~2 GB)
 4. Install ffmpeg via conda-forge
 5. Save the conda Python path to `~/.forge/config.yaml`

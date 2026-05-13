@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-read a plate via forge-io (for production validation against v0.1.1+).
+"""Smoke-read a plate via forge-io (for production validation; forge-align pins v0.2.0+).
 
 Decode-only (no OCIO) is supported via --no-ocio. Otherwise --working-space is
 passed to forge_io.read_frame (default: sRGB); use --source-cs when the file
