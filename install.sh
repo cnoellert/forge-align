@@ -78,10 +78,12 @@ echo ""
 
 # ── Config helpers ─────────────────────────────────────────────────
 _read_config_value() {
-    # Read a single-value key from config.yaml
+    # Read a single-value key from config.yaml. Missing key returns empty
+    # (the trailing `|| true` keeps the failure-on-no-match from tripping
+    # `set -e` + `pipefail` for keys that aren't in the file yet).
     local key="$1"
     if [[ -f "$CONFIG_FILE" ]]; then
-        grep "^${key}:" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^${key}: *//"
+        grep "^${key}:" "$CONFIG_FILE" 2>/dev/null | head -1 | sed "s/^${key}: *//" || true
     fi
 }
 
