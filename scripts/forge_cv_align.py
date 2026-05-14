@@ -78,11 +78,37 @@ def _resolve_forge_python():
 _FORGE_PYTHON = _resolve_forge_python()
 
 
-def _subprocess_env():
-    """Return os.environ extended with FORGE_*_PATH from config.
+def _resolve_flame_ocio_config():
+    """Resolve the active Flame project's OCIO config path.
 
-    Existing env values win over config (so a shell override still
-    takes effect); config fills in only when the env var is unset.
+    Flame writes a symlink at ``{setups}/colour_mgmt/config.ocio`` pointing
+    at the bundled or custom config selected in the project's colour
+    management settings. Reading this is the authoritative source — no
+    install-side config sync needed.
+
+    Returns absolute path or None when no project / no config selected.
+    """
+    try:
+        import flame  # available because the hook runs inside Flame
+        proj = flame.project.current_project
+        cfg = os.path.join(proj.setups_folder, "colour_mgmt", "config.ocio")
+        if os.path.exists(cfg):
+            return os.path.realpath(cfg)
+    except Exception:
+        pass
+    return None
+
+
+def _subprocess_env():
+    """Return os.environ extended with vars the cli_solve subprocess needs.
+
+    - FORGE_RED_REDLINE_PATH / FORGE_ARRI_ART_PATH from ~/.forge/config.yaml
+      (forge-io's vendor-raw decode backends).
+    - OCIO from the active Flame project's colour_mgmt/config.ocio
+      (forge-io's working_space="sRGB" transform requires a config).
+
+    Existing env values win over derived values, so a shell override still
+    takes effect.
     """
     env = os.environ.copy()
     red = _FORGE_CONFIG.get("red_backend") or ""
@@ -91,6 +117,14 @@ def _subprocess_env():
         env["FORGE_RED_REDLINE_PATH"] = red
     if arri and not env.get("FORGE_ARRI_ART_PATH") and not env.get("FORGE_ARRI_SDK_PATH"):
         env["FORGE_ARRI_ART_PATH"] = arri
+    if not env.get("OCIO"):
+        ocio = _resolve_flame_ocio_config()
+        if ocio:
+            env["OCIO"] = ocio
+            _log(f"OCIO resolved from Flame project: {ocio}")
+        else:
+            _log("OCIO unresolved (Flame project has no colour_mgmt/config.ocio) — "
+                 "cli_solve will error on working_space transforms")
     return env
 
 
