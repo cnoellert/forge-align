@@ -37,7 +37,7 @@ bash install.sh
 
 The installer will:
 1. Create (or reuse) a conda environment with Python 3.11
-2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.2.2` — push tags to GitHub before installing on a fresh machine)
+2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.3.1`, which adds ARRI `.ari/.arx` and RED `.r3d` decode with per-frame R3D selection — push tags to GitHub before installing on a fresh machine)
 3. Optionally install SuperPoint support (torch + lightglue, ~2 GB)
 4. Install ffmpeg via conda-forge
 5. Save the conda Python path to `~/.forge/config.yaml`
@@ -66,7 +66,7 @@ import sys; [sys.modules.pop(k) for k in list(sys.modules) if 'forge_cv_align' i
 
 ## Validation
 
-Quick **forge-io** read smoke (uses `read_frame` the same way the solver path does). Requires a generated or production plate and a Python env where **forge-io** + **OpenImageIO** import (e.g. the `forge` conda env after `install.sh`).
+Quick read smoke. Calls `forge_cv.extractor.read_sequence_frame` (or `extract_container_frame` for MOV/MXF) — the **same helpers the solver uses**, so a passing smoke proves the production decode path. Requires a generated or production plate and a Python env where **forge-io** + **OpenImageIO** import (e.g. the `forge` conda env after `install.sh`). For ARRI/RED raw inputs, set `FORGE_ARRI_ART_PATH` / `FORGE_RED_REDLINE_PATH` first (see Troubleshooting).
 
 **Decode only** (no OCIO; good for a tiny EXR after you run `python tests/fixtures/generate_fixtures.py` in the **forge-io** repo):
 
@@ -165,7 +165,11 @@ Flame Python (hook)
 
 - **Log file:** `/tmp/forge_cv_align.log` — contains frame numbers, subprocess commands, and errors
 - **"No match"** — the detector couldn't find enough features. Try a different detector (SuperPoint for large scale gaps), or Affine/Homography mode. Images with very little texture (solid backgrounds, heavy motion blur) may not match.
-- **Camera raw formats** (ARX, R3D, BRAW) — cannot be read outside Flame. Use the graded or comp version on another track instead.
+- **Camera raw formats** — forge-io v0.3.0 decodes **ARRI** (`.ari/.arx`) and **RED** (`.r3d`) when the vendor backend env var is set in the Flame Python environment:
+  - ARRI: `FORGE_ARRI_ART_PATH=/path/to/art-cmd` (or `FORGE_ARRI_SDK_PATH`)
+  - RED:  `FORGE_RED_REDLINE_PATH=/path/to/REDline` (or `FORGE_RED_SDK_PATH`)
+  - **R3D frame selection** (forge-io v0.3.1+): the 0-based intra-clip frame is forwarded as REDline `--start N --end N`. Earlier than v0.3.1, every keyframe collapsed to clip frame 0.
+  - **BRAW / DNG / Canon raw** — no decode path; use the graded/comp version on another track.
 - **Timewarp error** — if you see `RuntimeError: This method is only available when using the Speed/Timing mode`, the hook may need to be updated. Pull the latest and redeploy.
 - **ffmpeg errors** — ensure ffmpeg is installed and accessible. Required for MP4/MOV reference extraction.
 - **Wrong conda Python** — check `~/.forge/config.yaml` points to the correct Python path. Re-run `bash install.sh` to update.

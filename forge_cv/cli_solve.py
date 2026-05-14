@@ -10,13 +10,20 @@ import sys
 
 
 _CONTAINER_EXTS = frozenset((".mp4", ".mov", ".mxf", ".avi", ".mkv"))
+_RAW_CLIP_EXTS = frozenset((".ari", ".arx", ".r3d"))
 
 
 def _read_frame(path, frame_idx, fps=23.976, *, assume_source: str | None = None):
-    """Read a frame, dispatching container vs image sequence by extension."""
-    from forge_cv.extractor import read_sequence_frame, extract_container_frame
+    """Read a frame, dispatching raw clip / container / image sequence by extension."""
+    from forge_cv.extractor import (
+        extract_container_frame,
+        read_raw_clip_frame,
+        read_sequence_frame,
+    )
 
     ext = os.path.splitext(path)[1].lower()
+    if ext in _RAW_CLIP_EXTS:
+        return read_raw_clip_frame(path, frame_idx, assume_source=assume_source)
     if ext in _CONTAINER_EXTS:
         return extract_container_frame(path, frame_idx, fps=fps, assume_source=assume_source)
     return read_sequence_frame(path, frame_idx, assume_source=assume_source)

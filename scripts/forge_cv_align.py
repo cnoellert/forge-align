@@ -33,21 +33,41 @@ def _log(msg):
 # forge conda env Python — has cv2, numpy, and forge_cv installed via pip.
 # Resolved from ~/.forge/config.yaml (written by install.sh).
 # Fallback: ~/miniconda3/envs/forge/bin/python
-def _resolve_forge_python():
-    """Read conda_python from ~/.forge/config.yaml, with fallback."""
+def _read_forge_config():
+    """Parse ~/.forge/config.yaml into a flat dict of scalar keys.
+
+    Recognized keys: conda_python, red_backend, arri_backend. Missing
+    keys map to empty strings. List values (deploy_targets) are skipped.
+    """
+    out = {"conda_python": "", "red_backend": "", "arri_backend": ""}
     config_path = os.path.expanduser("~/.forge/config.yaml")
-    if os.path.exists(config_path):
-        try:
-            with open(config_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("conda_python:"):
-                        python_path = line.split(":", 1)[1].strip()
-                        if python_path and os.path.exists(python_path):
-                            return python_path
-        except Exception:
-            pass
-    # Fallback: try common conda locations
+    if not os.path.exists(config_path):
+        return out
+    try:
+        with open(config_path) as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#") or s.startswith("- "):
+                    continue
+                if ":" not in s:
+                    continue
+                key, _, value = s.partition(":")
+                key = key.strip()
+                if key in out:
+                    out[key] = value.strip()
+    except Exception:
+        pass
+    return out
+
+
+_FORGE_CONFIG = _read_forge_config()
+
+
+def _resolve_forge_python():
+    """Return path to the conda Python configured for forge-align."""
+    cp = _FORGE_CONFIG.get("conda_python", "")
+    if cp and os.path.exists(cp):
+        return cp
     for env_name in ("forge-cv", "forge"):
         for base in ("~/miniconda3", "~/anaconda3"):
             candidate = os.path.expanduser(f"{base}/envs/{env_name}/bin/python")
@@ -56,6 +76,22 @@ def _resolve_forge_python():
     return os.path.expanduser("~/miniconda3/envs/forge-cv/bin/python")
 
 _FORGE_PYTHON = _resolve_forge_python()
+
+
+def _subprocess_env():
+    """Return os.environ extended with FORGE_*_PATH from config.
+
+    Existing env values win over config (so a shell override still
+    takes effect); config fills in only when the env var is unset.
+    """
+    env = os.environ.copy()
+    red = _FORGE_CONFIG.get("red_backend") or ""
+    arri = _FORGE_CONFIG.get("arri_backend") or ""
+    if red and not env.get("FORGE_RED_REDLINE_PATH") and not env.get("FORGE_RED_SDK_PATH"):
+        env["FORGE_RED_REDLINE_PATH"] = red
+    if arri and not env.get("FORGE_ARRI_ART_PATH") and not env.get("FORGE_ARRI_SDK_PATH"):
+        env["FORGE_ARRI_ART_PATH"] = arri
+    return env
 
 
 def _resolve_bin(name):
@@ -407,12 +443,25 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
          f"(frame_offset={source_info['frame_offset']}{fps_info}, "
          f"cs={source_info.get('colourspace', '?')})")
 
-    # Camera raw formats can't be decoded outside Flame — skip with guidance
+    # Camera raw formats: forge-io v0.3.0+ decodes ARRI (.ari/.arx) and RED (.r3d)
+    # when the vendor backend env var is set. Other raw formats still need the
+    # graded/comp version on another track.
     ext = os.path.splitext(source_info["file_path"])[1].lower()
-    if ext in _RAW_EXTS:
-        _log(f"Skipping {source_name}: camera raw format ({ext}) — "
-             f"use graded or comp version on another track")
+    if ext in _UNSUPPORTED_RAW_EXTS:
+        _log(f"Skipping {source_name}: camera raw format ({ext}) has no forge-io "
+             f"decode path — use graded or comp version on another track")
         return f"Skipped (raw format {ext} — use graded/comp track)"
+    if ext in _ARRI_EXTS or ext in _RED_EXTS:
+        ok, reason = _raw_backend_available(ext)
+        if not ok:
+            _log(f"Skipping {source_name}: {reason}")
+            return f"Skipped (raw {ext} — {reason})"
+        if ext in _RED_EXTS:
+            # forge-io v0.3.0 RED reader always decodes frame 0 of the clip; per-frame
+            # selection is a future feature. Alignment math below still runs but
+            # every sampled frame resolves to the same pixels.
+            _log(f"Note: forge-io v0.3.0 R3D reader decodes clip frame 0 only — "
+                 f"frame sampling will use the same image for every keyframe")
 
     rec_in = source_info["record_in_frame"]
     rec_out = source_info["record_out_frame"]
@@ -572,10 +621,37 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
 
 _CONTAINER_EXTS = frozenset(('.mov', '.mp4', '.mxf', '.avi', '.mkv'))
 
-# Camera raw formats that require vendor SDKs or Flame/Wiretap to decode.
-# ffmpeg and OpenCV cannot read these. Skip with a message directing the
-# user to use the graded/comp version on another track instead.
-_RAW_EXTS = frozenset(('.arx', '.ari', '.r3d', '.braw', '.dng', '.nef', '.cr2', '.cr3'))
+# ARRI / RED raw formats are decoded by forge-io v0.3.0+ via vendor backends
+# (art-cmd for ARRI, REDline for RED). Availability is probed per-ext at
+# runtime via _raw_backend_available().
+_ARRI_EXTS = frozenset(('.ari', '.arx'))
+_RED_EXTS = frozenset(('.r3d',))
+
+# Camera raw formats with no decode path in forge-io. Skip with a message
+# directing the user to the graded/comp version on another track.
+_UNSUPPORTED_RAW_EXTS = frozenset(('.braw', '.dng', '.nef', '.cr2', '.cr3'))
+
+
+def _raw_backend_available(ext):
+    """Return (ok, reason) for whether forge-io can decode this raw ext.
+
+    Checks both the live environment AND ~/.forge/config.yaml's red_backend /
+    arri_backend keys, since the hook injects those into the cli_solve
+    subprocess env regardless of how Flame was launched.
+    """
+    if ext in _ARRI_EXTS:
+        if (os.environ.get("FORGE_ARRI_ART_PATH")
+                or os.environ.get("FORGE_ARRI_SDK_PATH")
+                or _FORGE_CONFIG.get("arri_backend")):
+            return True, ""
+        return False, "set arri_backend in ~/.forge/config.yaml (or FORGE_ARRI_ART_PATH) to enable ARRI decode"
+    if ext in _RED_EXTS:
+        if (os.environ.get("FORGE_RED_REDLINE_PATH")
+                or os.environ.get("FORGE_RED_SDK_PATH")
+                or _FORGE_CONFIG.get("red_backend")):
+            return True, ""
+        return False, "set red_backend in ~/.forge/config.yaml (or FORGE_RED_REDLINE_PATH) to enable RED decode"
+    return False, f"no forge-io backend for {ext}"
 
 
 def _get_segment_info(seg):
@@ -700,6 +776,17 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
     import json
     import subprocess
 
+    # For raw camera clips, forge-io's reader emits a canonical scene-linear
+    # source CS (RED → REDWideGamutRGB/linear, ARRI → AP0/D60/linear) and the
+    # extractor lands the solver on display-referred sRGB via OCIO. Flame's
+    # get_colour_space() typically returns the log-encoded camera CS — passing
+    # that as --source-cs would override OCIO assume_source incorrectly. Strip
+    # it for raw clips so OCIO + forge-io own the color science end-to-end.
+    src_ext = os.path.splitext(source_info["file_path"])[1].lower()
+    ref_ext = os.path.splitext(ref_info["file_path"])[1].lower()
+    src_cs = "" if src_ext in _ARRI_EXTS or src_ext in _RED_EXTS else source_info.get("colourspace", "")
+    ref_cs = "" if ref_ext in _ARRI_EXTS or ref_ext in _RED_EXTS else ref_info.get("colourspace", "")
+
     cmd = [
         _FORGE_PYTHON, "-m", "forge_cv.cli_solve",
         "--source", source_info["file_path"],
@@ -717,8 +804,8 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
         "--detector", detector,
         "--mode", mode,
         "--ref-fps", str(ref_fps),
-        "--source-cs", source_info.get("colourspace", ""),
-        "--ref-cs", ref_info.get("colourspace", ""),
+        "--source-cs", src_cs,
+        "--ref-cs", ref_cs,
     ]
 
     # Pass source container fps for seek-based extraction
@@ -731,6 +818,7 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
     try:
         proc = subprocess.run(
             cmd, capture_output=True, timeout=120,
+            env=_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
         _log("CV solve subprocess timed out")

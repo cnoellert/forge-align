@@ -153,6 +153,36 @@ def extract_container_frames(
     ]
 
 
+def read_raw_clip_frame(
+    clip_path: str,
+    frame_index: int,
+    *,
+    working_space: str | None = "sRGB",
+    assume_source: str | None = None,
+    ocio_config: str | Path | None = None,
+) -> np.ndarray:
+    """Read a frame from a single-file camera-raw clip (ARRI .ari/.arx, RED .r3d).
+
+    These files are not image sequences and not ffmpeg containers — the path
+    is the clip itself. Decoding is delegated entirely to forge-io's vendor
+    backends (art-cmd for ARRI, REDline for RED), which require the matching
+    backend env var (FORGE_ARRI_ART_PATH, FORGE_RED_REDLINE_PATH, or their
+    *_SDK_PATH variants). ``frame_index`` is the 0-based intra-clip frame;
+    forge-io v0.3.1+ honors it for RED via REDline ``--start N --end N``.
+    """
+    if not os.path.exists(clip_path):
+        raise FileNotFoundError(f"Clip not found: {clip_path}")
+
+    img = read(
+        clip_path,
+        working_space=working_space,
+        assume_source=assume_source,
+        ocio_config=ocio_config,
+        frame_index=frame_index,
+    )
+    return np.ascontiguousarray(img.pixels, dtype=np.float32)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

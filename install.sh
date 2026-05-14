@@ -94,22 +94,57 @@ _read_config_list() {
 }
 
 _save_config() {
-    # Rewrite config.yaml with current state
+    # Rewrite config.yaml with current state.
+    # Args: conda_python red_backend arri_backend deploy_targets...
     mkdir -p "$CONFIG_DIR"
     local conda_python="$1"
-    shift
+    local red_backend="$2"
+    local arri_backend="$3"
+    shift 3
 
-    cat > "$CONFIG_FILE" <<YAML
-# forge-align configuration — managed by install.sh
-conda_python: $conda_python
-
-# All deploy targets (global + project-specific)
-deploy_targets:
-YAML
+    {
+        echo "# forge-align configuration — managed by install.sh"
+        echo "conda_python: $conda_python"
+        echo ""
+        echo "# Optional vendor-raw decode backends (used by forge-io v0.3.0+)."
+        echo "# Hook injects these as FORGE_RED_REDLINE_PATH / FORGE_ARRI_ART_PATH"
+        echo "# into the cli_solve subprocess env. Leave empty to skip raw decode."
+        echo "red_backend: ${red_backend}"
+        echo "arri_backend: ${arri_backend}"
+        echo ""
+        echo "# All deploy targets (global + project-specific)"
+        echo "deploy_targets:"
+    } > "$CONFIG_FILE"
     for t in "$@"; do
         echo "  - $t" >> "$CONFIG_FILE"
     done
 }
+
+_detect_redline() {
+    # Probe standard REDline install locations on macOS/Linux.
+    local candidates=(
+        "/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/MacOS/REDline"
+        "/Applications/REDCINE-X PRO.app/Contents/MacOS/REDline"
+        "/usr/local/bin/REDline"
+        "/opt/REDCINE-X/REDline"
+    )
+    for c in "${candidates[@]}"; do
+        [[ -x "$c" ]] && echo "$c" && return 0
+    done
+    return 1
+}
+
+_detect_art_cmd() {
+    # Probe standard art-cmd install locations.
+    for c in /Applications/art-cmd_*/bin/art-cmd /usr/local/bin/art-cmd /opt/art-cmd/bin/art-cmd; do
+        [[ -x "$c" ]] && echo "$c" && return 0
+    done
+    return 1
+}
+
+# ── Read existing backend paths (preserve across re-installs) ──────
+RED_BACKEND="$(_read_config_value red_backend)"
+ARRI_BACKEND="$(_read_config_value arri_backend)"
 
 # ── Collect deploy targets ─────────────────────────────────────────
 # Start with saved targets from config
@@ -256,6 +291,36 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
     CONDA_PYTHON=$("$ENV_BIN/python" -c "import sys; print(sys.executable)")
     ok "Conda Python: $CONDA_PYTHON"
 
+    # ── Step 5b: Vendor-raw backend detection ──────────────────────
+    # forge-io v0.3.0+ decodes ARRI .ari/.arx and RED .r3d via vendor
+    # binaries. The hook will inject these paths as FORGE_*_PATH env
+    # vars into the cli_solve subprocess so Flame doesn't have to be
+    # launched from a shell that already exports them.
+    echo ""
+    if [[ -z "$RED_BACKEND" ]]; then
+        DETECTED_RED="$(_detect_redline || true)"
+        if [[ -n "$DETECTED_RED" ]]; then
+            read -rp "  REDline detected at $DETECTED_RED — enable R3D decode? [Y/n]: " USE_RED
+            [[ ! "$USE_RED" =~ ^[Nn]$ ]] && RED_BACKEND="$DETECTED_RED"
+        else
+            info "REDline not found at standard paths — R3D decode disabled (set red_backend in $CONFIG_FILE later to enable)"
+        fi
+    else
+        ok "REDline: $RED_BACKEND (from existing config)"
+    fi
+
+    if [[ -z "$ARRI_BACKEND" ]]; then
+        DETECTED_ARRI="$(_detect_art_cmd || true)"
+        if [[ -n "$DETECTED_ARRI" ]]; then
+            read -rp "  art-cmd detected at $DETECTED_ARRI — enable ARRI decode? [Y/n]: " USE_ARRI
+            [[ ! "$USE_ARRI" =~ ^[Nn]$ ]] && ARRI_BACKEND="$DETECTED_ARRI"
+        else
+            info "art-cmd not found at standard paths — ARRI decode disabled (set arri_backend in $CONFIG_FILE later to enable)"
+        fi
+    else
+        ok "art-cmd: $ARRI_BACKEND (from existing config)"
+    fi
+
     # ── Step 6: Interactive target selection (if none specified) ────
     if [[ ${#DEPLOY_TARGETS[@]} -eq 0 && -z "$DEPLOY_GLOBAL" && ${#PROJECT_PATHS[@]} -eq 0 ]]; then
         echo ""
@@ -347,7 +412,7 @@ fi
 
 # ── Save config ────────────────────────────────────────────────────
 if [[ -n "$CONDA_PYTHON" && "$CONDA_PYTHON" != "(not configured"* ]]; then
-    _save_config "$CONDA_PYTHON" "${DEPLOY_TARGETS[@]+"${DEPLOY_TARGETS[@]}"}"
+    _save_config "$CONDA_PYTHON" "$RED_BACKEND" "$ARRI_BACKEND" "${DEPLOY_TARGETS[@]+"${DEPLOY_TARGETS[@]}"}"
     info "Config saved: $CONFIG_FILE"
 fi
 
