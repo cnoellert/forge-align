@@ -12,8 +12,8 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 - **Multi-segment batch** — select many plates + one ref, aligns all
 - **Three detectors** — SIFT (default), AKAZE, SuperPoint+LightGlue
 - **Timewarp-aware** — correct source frame mapping for Speed and Timing (Frame) mode timewarps
-- **Colourspace-aware** — sequence frames are read through **forge-io** (OpenImageIO + OpenColorIO): defaults map to **`sRGB`** for feature detection; pass **`--source-cs` / `--ref-cs`** so unknown file colorspaces resolve via OCIO `assume_source`. Set the **`OCIO`** environment (or extend the CLI later with an explicit config path) to match your facility config.
-- **Container + sequence sources** — EXR/DPX frame sequences and ProRes MOV/MXF containers
+- **Colourspace-aware** — all reads go through **forge-io** (OpenImageIO + OpenColorIO) and land on display-encoded **`sRGB`** for SIFT. The hook auto-resolves the active Flame project's OCIO config from `{setups}/colour_mgmt/config.ocio` and injects it into the solver subprocess — no shell `OCIO` env required.
+- **EXR/DPX/MOV/MXF + camera raw** — sequences, ProRes containers, and **ARRI** `.ari/.arx` + **RED** `.r3d` via forge-io's vendor backends (art-cmd, REDline). Backends are auto-detected at install time and persisted to `~/.forge/config.yaml`.
 - **Three solve modes** — Similarity (4 DOF), Affine (6 DOF), Homography (8 DOF)
 - **Frame sampling** — First frame, First + Last, or Every N frames
 - **Round to 0.5** — optional rounding for cleaner manual tweaking
@@ -25,7 +25,19 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 - Autodesk Flame 2025+
 - Miniconda or Anaconda
 - ffmpeg (for MP4/MOV reference extraction)
-- **OpenImageIO + OpenColorIO** (pulled in by the **forge-io** dependency; Conda/ASWF-style stacks satisfy them). For plate/reference **sequences**, the solver expects a usable **`OCIO`** config (see forge-io `read(..., working_space=\"sRGB\")`).
+- **OpenImageIO + OpenColorIO** (pulled in by the **forge-io** dependency; Conda/ASWF-style stacks satisfy them).
+- A Flame project with a colour management config selected (Project Settings → Colour Management → pick one). The hook reads `{setups}/colour_mgmt/config.ocio` at run time; no shell OCIO env needed.
+
+### Optional — camera raw decode
+
+forge-io v0.3.0+ decodes ARRI `.ari/.arx` (via [art-cmd](https://www.arri.com/en/learn-help/learn-help-camera-system/tools/arri-reference-tool)) and RED `.r3d` (via REDline, bundled with REDCINE-X PRO). `install.sh` probes standard install paths and persists them to `~/.forge/config.yaml` as `arri_backend:` / `red_backend:`. The hook injects these into the solver subprocess as `FORGE_ARRI_ART_PATH` / `FORGE_RED_REDLINE_PATH`. Leave a backend empty to skip that format.
+
+| Format | Backend | Auto-probed install paths |
+|---|---|---|
+| ARRI `.ari` / `.arx` | art-cmd | `/Applications/art-cmd_*/bin/art-cmd`, `/usr/local/bin/art-cmd`, `/opt/art-cmd/bin/art-cmd` |
+| RED `.r3d` | REDline | `/Applications/REDCINE-X*/…/REDline`, `/usr/local/bin/REDline`, `/opt/REDCINE-X/REDline` |
+
+**RED OCIO caveat:** forge-io v0.3.2 emits `source_colorspace="Linear REDWideGamutRGB"`, which is the OCIO 2.x studio-config canonical name but is **not** in Flame's stock `flame_core_config` / `aces2.0_config` as of 2026.0. For R3D workflows, add `Linear REDWideGamutRGB` as a colorspace in your project's `project_custom_config.ocio` (either real RWG→sRGB math, or alias to `ACEScg` for a CV-acceptable approximation — small gamut shift, transfer is correct, SIFT doesn't care). ARRI's emitted `ACES2065-1` resolves natively in the Flame configs.
 
 ## Install
 
@@ -40,8 +52,9 @@ The installer will:
 2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.3.2`, which decodes ARRI `.ari/.arx` and RED `.r3d` with OCIO-canonical source colorspace names — push tags to GitHub before installing on a fresh machine)
 3. Optionally install SuperPoint support (torch + lightglue, ~2 GB)
 4. Install ffmpeg via conda-forge
-5. Save the conda Python path to `~/.forge/config.yaml`
-6. Deploy the hook globally (default) or to a custom path
+5. Detect REDline and art-cmd at standard install paths; prompt before persisting them as `red_backend:` / `arri_backend:` in `~/.forge/config.yaml`
+6. Save the conda Python path to `~/.forge/config.yaml`
+7. Deploy the hook globally (default) or to a custom path
 
 You can also specify options directly:
 ```bash
@@ -66,9 +79,15 @@ import sys; [sys.modules.pop(k) for k in list(sys.modules) if 'forge_cv_align' i
 
 ## Validation
 
-Quick read smoke. Calls `forge_cv.extractor.read_sequence_frame` (or `extract_container_frame` for MOV/MXF) — the **same helpers the solver uses**, so a passing smoke proves the production decode path. Requires a generated or production plate and a Python env where **forge-io** + **OpenImageIO** import (e.g. the `forge` conda env after `install.sh`). For ARRI/RED raw inputs, set `FORGE_ARRI_ART_PATH` / `FORGE_RED_REDLINE_PATH` first (see Troubleshooting).
+Quick read smoke. Three-way dispatches on extension exactly like the solver does:
 
-**Decode only** (no OCIO; good for a tiny EXR after you run `python tests/fixtures/generate_fixtures.py` in the **forge-io** repo):
+- `.r3d` → `forge_cv.extractor.read_raw_clip_frame` (single-file clip, intra-clip frame_index forwarded)
+- `.mov/.mp4/.mxf` → `extract_container_frame` (ffmpeg seek → PNG → forge-io)
+- everything else → `read_sequence_frame` (`resolve_pattern` + forge-io)
+
+Requires a Python env where **forge-io** + **OpenImageIO** import (e.g. the `forge` conda env after `install.sh`).
+
+**Decode only** (no OCIO; works on a tiny EXR after `python tests/fixtures/generate_fixtures.py` in the **forge-io** repo):
 
 ```bash
 python scripts/smoke_v0_1_1.py \
@@ -77,7 +96,7 @@ python scripts/smoke_v0_1_1.py \
   --no-ocio
 ```
 
-**With OCIO** (default working space name is passed through; set `OCIO` to your facility config first):
+**With OCIO** (set `OCIO` to your facility config first):
 
 ```bash
 export OCIO=/absolute/path/to/config.ocio
@@ -86,6 +105,28 @@ python scripts/smoke_v0_1_1.py \
   --frame 42 \
   --working-space sRGB \
   --source-cs ACEScg
+```
+
+**ARRI `.arx` sequence** (auto-resolves frame number into the path):
+
+```bash
+export FORGE_ARRI_ART_PATH=/Applications/art-cmd_1.0.0_macos_universal/bin/art-cmd
+export OCIO=/absolute/path/to/config.ocio  # must know ACES2065-1
+python scripts/smoke_v0_1_1.py \
+  --plate /path/to/CLIP.0000001.arx \
+  --frame 250 \
+  --working-space sRGB
+```
+
+**RED `.r3d` single-file clip** (intra-clip frame_index):
+
+```bash
+export FORGE_RED_REDLINE_PATH=/usr/local/bin/REDline
+export OCIO=/absolute/path/to/config.ocio  # must know Linear REDWideGamutRGB
+python scripts/smoke_v0_1_1.py \
+  --plate /path/to/clip.R3D \
+  --frame 0 \
+  --working-space sRGB
 ```
 
 Exit code **0** on success; **1** on failure, with the error on stderr.
@@ -111,16 +152,17 @@ The tool creates Action effects on each plate segment with computed transforms.
 
 ## Colourspace Handling
 
-The hook reads each segment's colourspace from Flame via `get_colour_space()` and passes it to the solver. Before feature detection, each image is converted to a consistent display-referred grayscale:
+All transfer-shaping is delegated to **OCIO via forge-io** — the solver itself does nothing colour-aware beyond a 255× clip. Flow:
 
-| Source Colourspace | Transfer |
-|---|---|
-| Linear (ACEScg, ACES2065-1, scene-linear) | sRGB gamma (OETF) |
-| Log (ARRI LogC3, REDLog3G10, Sony S-Log3) | Log decode → linear → sRGB |
-| Display (Rec.709, sRGB) | Passthrough |
-| Unknown | Heuristic (mean < 0.2 → assume linear) |
+1. **Source colourspace identification** — forge-io's reader emits the canonical name of what it decoded to:
+   - ARRI `.ari/.arx` → `ACES2065-1` (via art-cmd, scene-linear ACES AP0/D60)
+   - RED `.r3d` → `Linear REDWideGamutRGB` (via REDline, scene-linear RWG)
+   - EXR/DPX/PNG/MOV → whatever the file declares (or `unknown` → falls through to the segment's Flame CS via `assume_source`)
+2. **OCIO config resolution** — the hook reads the active Flame project's `{setups}/colour_mgmt/config.ocio` symlink at run time and exports it as `OCIO=` to the solver subprocess. No shell env or install-time sync required.
+3. **Transform to display-encoded sRGB** — forge-io builds an OCIO processor `source_colorspace → sRGB` and applies it. `sRGB` resolves via OCIO config alias (e.g. `sRGB Encoded Rec.709 (sRGB)` in Flame's `aces2.0_config`) — the actual sRGB OETF curve is applied (linear 0.18 → encoded ~0.461).
+4. **Solver receives display-referred sRGB-shaped pixels** — `_to_gray_uint8` does a simple `clip(x*255, 0, 255).astype(uint8)`. SIFT sees the expected contrast distribution regardless of source.
 
-This ensures SIFT gets usable contrast regardless of whether the source is linear EXR, log-encoded camera footage, or an sRGB offline reference.
+For raw clips, the hook **strips** Flame's `get_colour_space()` string from `--source-cs` (it would be the in-camera log encoding, which would incorrectly override forge-io's canonical scene-linear emission via `assume_source`). For non-raw segments, Flame's CS is passed through and forge-io uses it as `assume_source` when the file declares `unknown`.
 
 ## Detectors
 
@@ -163,13 +205,16 @@ Flame Python (hook)
 
 ## Troubleshooting
 
-- **Log file:** `/tmp/forge_cv_align.log` — contains frame numbers, subprocess commands, and errors
-- **"No match"** — the detector couldn't find enough features. Try a different detector (SuperPoint for large scale gaps), or Affine/Homography mode. Images with very little texture (solid backgrounds, heavy motion blur) may not match.
-- **Camera raw formats** — forge-io v0.3.0 decodes **ARRI** (`.ari/.arx`) and **RED** (`.r3d`) when the vendor backend env var is set in the Flame Python environment:
-  - ARRI: `FORGE_ARRI_ART_PATH=/path/to/art-cmd` (or `FORGE_ARRI_SDK_PATH`)
-  - RED:  `FORGE_RED_REDLINE_PATH=/path/to/REDline` (or `FORGE_RED_SDK_PATH`)
-  - **R3D frame selection** (forge-io v0.3.1+): the 0-based intra-clip frame is forwarded as REDline `--start N --end N`. Earlier than v0.3.1, every keyframe collapsed to clip frame 0.
+- **Log file:** `/tmp/forge_cv_align.log` — frame numbers, subprocess commands, OCIO resolution, errors.
+- **"No match"** — detector couldn't find enough features. Try SuperPoint (large scale gaps) or Affine/Homography mode. Very-low-texture images (solid backgrounds, heavy motion blur) may not match at all.
+- **`OCIOConfigError: No OCIO config`** — the active Flame project has no `colour_mgmt/config.ocio` symlink (Project Settings → Colour Management → pick a config). The log will also show `OCIO unresolved (Flame project has no colour_mgmt/config.ocio)`.
+- **`OCIOTransformError: Failed to build processor`** — the project's OCIO config doesn't know one of the colorspace names forge-io emitted:
+  - ARRI emits `ACES2065-1` — present in `flame_core_config` and `aces2.0_config`.
+  - RED emits `Linear REDWideGamutRGB` — **not** in stock Flame configs as of 2026.0. Add it to your `project_custom_config.ocio` overlay (real RWG→sRGB math, or alias to `ACEScg` for a CV-acceptable approximation).
+- **Camera raw formats** — backends configured via `~/.forge/config.yaml` (`red_backend:` / `arri_backend:`) and injected into the solver subprocess by the hook. Override per-shell with `FORGE_ARRI_ART_PATH` / `FORGE_RED_REDLINE_PATH` (or the `*_SDK_PATH` SDK variants).
   - **BRAW / DNG / Canon raw** — no decode path; use the graded/comp version on another track.
-- **Timewarp error** — if you see `RuntimeError: This method is only available when using the Speed/Timing mode`, the hook may need to be updated. Pull the latest and redeploy.
+- **Low confidence on `.ari/.arx`** — make sure you're on `forge-align ≥ v0.3.2`. Earlier versions wrongly dispatched ARRI sequences through the single-file raw-clip path, decoding the same frame for every keyframe.
+- **R3D frame selection no-op** — requires forge-io ≥ v0.3.1. Earlier versions always decoded clip frame 0.
+- **Timewarp error** — if you see `RuntimeError: This method is only available when using the Speed/Timing mode`, redeploy the hook.
 - **ffmpeg errors** — ensure ffmpeg is installed and accessible. Required for MP4/MOV reference extraction.
 - **Wrong conda Python** — check `~/.forge/config.yaml` points to the correct Python path. Re-run `bash install.sh` to update.
