@@ -210,16 +210,26 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
 
     # ── Step 2: Install forge_cv package ───────────────────────────
     echo ""
-    info "Installing OpenImageIO + OpenColorIO (forge-io runtime)..."
-    # conda-forge is ideal on many linux-64 stacks, but osx-arm64 often has no
-    # opencolorio package and openimageio builds may lack OCIO. PyPI ships
-    # matching wheels (e.g. OpenImageIO 3.x + opencolorio 2.5) that work there.
-    if conda install -n "$ENV_NAME" -c conda-forge openimageio opencolorio -y &>/dev/null; then
-        ok "OIIO + OCIO installed from conda-forge"
-    else
-        warn "conda-forge OIIO/OCIO install failed (common on osx-arm64); falling back to PyPI"
+    # conda-forge ships matching OIIO + OCIO on linux-64 and osx-x86_64. On
+    # osx-arm64 the channel has no opencolorio package (and openimageio
+    # builds there lack OCIO), so go straight to PyPI wheels. Skipping the
+    # doomed conda attempt avoids a multi-minute solver run + an alarming
+    # "install failed" warning every time.
+    OS_KIND="$(uname -s)"
+    ARCH_KIND="$(uname -m)"
+    if [[ "$OS_KIND" == "Darwin" && "$ARCH_KIND" == "arm64" ]]; then
+        info "Installing OpenImageIO + OpenColorIO from PyPI (osx-arm64)..."
         "$ENV_BIN/pip" install OpenImageIO opencolorio
         ok "OIIO + OCIO installed from PyPI"
+    else
+        info "Installing OpenImageIO + OpenColorIO (forge-io runtime)..."
+        if conda install -n "$ENV_NAME" -c conda-forge openimageio opencolorio -y &>/dev/null; then
+            ok "OIIO + OCIO installed from conda-forge"
+        else
+            warn "conda-forge OIIO/OCIO install failed; falling back to PyPI"
+            "$ENV_BIN/pip" install OpenImageIO opencolorio
+            ok "OIIO + OCIO installed from PyPI"
+        fi
     fi
 
     info "Installing forge_cv and CV dependencies..."
