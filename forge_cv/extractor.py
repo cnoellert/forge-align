@@ -161,14 +161,18 @@ def read_raw_clip_frame(
     assume_source: str | None = None,
     ocio_config: str | Path | None = None,
 ) -> np.ndarray:
-    """Read a frame from a single-file camera-raw clip (ARRI .ari/.arx, RED .r3d).
+    """Read a frame from a single-file camera-raw clip (RED .r3d).
 
-    These files are not image sequences and not ffmpeg containers — the path
-    is the clip itself. Decoding is delegated entirely to forge-io's vendor
-    backends (art-cmd for ARRI, REDline for RED), which require the matching
-    backend env var (FORGE_ARRI_ART_PATH, FORGE_RED_REDLINE_PATH, or their
-    *_SDK_PATH variants). ``frame_index`` is the 0-based intra-clip frame;
-    forge-io v0.3.1+ honors it for RED via REDline ``--start N --end N``.
+    For single-file clips the path is the clip itself and ``frame_index`` is
+    the 0-based intra-clip frame, forwarded to forge-io's reader so the right
+    inner frame is decoded (RED via REDline ``--start N --end N`` in forge-io
+    v0.3.1+).
+
+    **Not used for ARRI .ari/.arx** — those are sequence-style (one file per
+    frame, frame number in the filename) and dispatch through
+    :func:`read_sequence_frame` so ``resolve_pattern`` can substitute the
+    frame number into the path before forge-io decodes the resulting per-
+    frame file.
     """
     if not os.path.exists(clip_path):
         raise FileNotFoundError(f"Clip not found: {clip_path}")

@@ -19,7 +19,10 @@ from pathlib import Path
 
 
 _CONTAINER_EXTS = frozenset((".mp4", ".mov", ".mxf", ".avi", ".mkv"))
-_RAW_CLIP_EXTS = frozenset((".ari", ".arx", ".r3d"))
+# Only single-file raw clips (one file per clip). .ari/.arx are sequence-style
+# and dispatch through the sequence path so resolve_pattern can map frame_idx
+# to the right per-frame file.
+_RAW_CLIP_EXTS = frozenset((".r3d",))
 
 
 def _ocio_debug_lines() -> list[str]:

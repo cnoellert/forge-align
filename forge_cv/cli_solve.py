@@ -10,7 +10,13 @@ import sys
 
 
 _CONTAINER_EXTS = frozenset((".mp4", ".mov", ".mxf", ".avi", ".mkv"))
-_RAW_CLIP_EXTS = frozenset((".ari", ".arx", ".r3d"))
+
+# Single-file raw clips — one file per CLIP (not per frame). frame_idx is the
+# intra-clip frame and gets forwarded to forge-io's reader. ARRI .ari/.arx are
+# NOT in this set: they are sequence-style (one file per frame, frame number
+# baked into the filename) and go through read_sequence_frame so resolve_pattern
+# can map frame_idx to the right .arx file on disk.
+_RAW_CLIP_EXTS = frozenset((".r3d",))
 
 
 def _read_frame(path, frame_idx, fps=23.976, *, assume_source: str | None = None):
