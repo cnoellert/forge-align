@@ -104,11 +104,12 @@ def _subprocess_env():
 
     - FORGE_RED_REDLINE_PATH / FORGE_ARRI_ART_PATH from ~/.forge/config.yaml
       (forge-io's vendor-raw decode backends).
-    - FORGE_FFMPEG_PATH / FORGE_FFPROBE_PATH from the solver conda env
-      (forge-io v0.4.0+ decodes .mov/.mp4/... via ffmpeg, discovered on PATH
-      or via these vars; the env bin isn't necessarily on Flame's PATH).
     - OCIO from the active Flame project's colour_mgmt/config.ocio
       (forge-io's working_space="sRGB" transform requires a config).
+
+    ffmpeg/ffprobe for container decode (forge-io v0.4.0+) are resolved at the
+    forge-io call boundary by forge_cv.extractor._ensure_ffmpeg_env, so they're
+    covered for every entry point (hook / direct / smoke), not just here.
 
     Existing env values win over derived values, so a shell override still
     takes effect.
@@ -120,11 +121,6 @@ def _subprocess_env():
         env["FORGE_RED_REDLINE_PATH"] = red
     if arri and not env.get("FORGE_ARRI_ART_PATH") and not env.get("FORGE_ARRI_SDK_PATH"):
         env["FORGE_ARRI_ART_PATH"] = arri
-    for var, binname in (("FORGE_FFMPEG_PATH", "ffmpeg"), ("FORGE_FFPROBE_PATH", "ffprobe")):
-        if not env.get(var):
-            resolved = _resolve_bin(binname)
-            if resolved != binname and os.path.exists(resolved):
-                env[var] = resolved
     if not env.get("OCIO"):
         ocio = _resolve_flame_ocio_config()
         if ocio:

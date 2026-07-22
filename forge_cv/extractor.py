@@ -22,6 +22,27 @@ def _resolve_bin(name: str) -> str:
     return name  # fall back to system PATH
 
 
+def _ensure_ffmpeg_env() -> None:
+    """Point forge-io at the env-local ffmpeg/ffprobe before a container decode.
+
+    forge-io v0.4.0 discovers ffmpeg via ``FORGE_FFMPEG_PATH`` /
+    ``FORGE_FFPROBE_PATH`` else ``shutil.which`` (PATH only). That misses the
+    split-runtime case where the solver runs under the conda env's Python but
+    the env ``bin/`` isn't on ``PATH``. We resolve the binaries relative to
+    ``sys.executable`` — the same trick the old direct-shell path used — and
+    export them so forge-io's env-var branch finds them regardless of how we
+    were launched (Flame hook, direct ``cli_solve``, or smoke). This is why the
+    resolution lives at the forge-io call boundary and not only in the hook.
+    Existing env values win, so a shell override still takes effect.
+    """
+    for var, name in (("FORGE_FFMPEG_PATH", "ffmpeg"), ("FORGE_FFPROBE_PATH", "ffprobe")):
+        if os.environ.get(var):
+            continue
+        resolved = _resolve_bin(name)
+        if resolved != name and os.path.exists(resolved):
+            os.environ[var] = resolved
+
+
 def read_sequence_frame(
     path_pattern: str,
     frame_index: int,
@@ -85,8 +106,10 @@ def read_container_frame(
     editorial MXF from Sony X-OCN raw) — those stay on :func:`extract_container_frame`.
 
     forge-io discovers ffmpeg/ffprobe on ``PATH`` or via ``FORGE_FFMPEG_PATH`` /
-    ``FORGE_FFPROBE_PATH``; the Flame hook injects the conda-env binaries so the
-    solver subprocess finds them regardless of how Flame was launched.
+    ``FORGE_FFPROBE_PATH``. :func:`_ensure_ffmpeg_env` resolves the conda-env
+    binaries relative to ``sys.executable`` and exports those vars first, so the
+    decode works even when the env ``bin/`` isn't on ``PATH`` (mirrors the old
+    direct-shell resolution, covering hook / direct / smoke entry points alike).
 
     Args:
         container_path: Path to the video file.
@@ -101,6 +124,7 @@ def read_container_frame(
     if not os.path.exists(container_path):
         raise FileNotFoundError(f"Container not found: {container_path}")
 
+    _ensure_ffmpeg_env()
     img = read(
         container_path,
         working_space=working_space,
