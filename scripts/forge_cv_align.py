@@ -107,6 +107,10 @@ def _subprocess_env():
     - OCIO from the active Flame project's colour_mgmt/config.ocio
       (forge-io's working_space="sRGB" transform requires a config).
 
+    ffmpeg/ffprobe for container decode (forge-io v0.4.0+) are resolved at the
+    forge-io call boundary by forge_cv.extractor._ensure_ffmpeg_env, so they're
+    covered for every entry point (hook / direct / smoke), not just here.
+
     Existing env values win over derived values, so a shell override still
     takes effect.
     """
@@ -653,7 +657,7 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
 # Segment info extraction
 # ---------------------------------------------------------------------------
 
-_CONTAINER_EXTS = frozenset(('.mov', '.mp4', '.mxf', '.avi', '.mkv'))
+_CONTAINER_EXTS = frozenset(('.mov', '.mp4', '.m4v', '.mxf', '.avi', '.mkv'))
 
 # ARRI / RED raw formats are decoded by forge-io v0.3.0+ via vendor backends
 # (art-cmd for ARRI, REDline for RED). Availability is probed per-ext at

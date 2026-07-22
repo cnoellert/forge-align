@@ -2,8 +2,9 @@
 """Smoke-read a plate through forge-align's production extractor path.
 
 This calls the SAME helpers cli_solve uses (forge_cv.extractor.read_sequence_frame
-for image sequences, extract_container_frame for MOV/MXF/etc.), so a passing
-smoke proves the path the solver will actually take.
+for image sequences, read_container_frame for .mov/.mp4/... via forge-io v0.4.0,
+extract_container_frame for the .mxf ffmpeg fallback), so a passing smoke proves
+the path the solver will actually take.
 
 Decode-only (no OCIO) is supported via --no-ocio. Otherwise --working-space is
 forwarded to forge_io.read; use --source-cs when the file declares unknown
@@ -18,7 +19,11 @@ import sys
 from pathlib import Path
 
 
-_CONTAINER_EXTS = frozenset((".mp4", ".mov", ".mxf", ".avi", ".mkv"))
+# Editorial containers forge-io v0.4.0+ decodes internally (frame-accurate).
+_FORGEIO_CONTAINER_EXTS = frozenset((".mp4", ".mov", ".m4v", ".avi", ".mkv"))
+# .mxf isn't registered by forge-io — shell ffmpeg via extract_container_frame.
+_FFMPEG_CONTAINER_EXTS = frozenset((".mxf",))
+_CONTAINER_EXTS = _FORGEIO_CONTAINER_EXTS | _FFMPEG_CONTAINER_EXTS
 # Only single-file raw clips (one file per clip). .ari/.arx are sequence-style
 # and dispatch through the sequence path so resolve_pattern can map frame_idx
 # to the right per-frame file.
@@ -73,6 +78,7 @@ def main() -> int:
     try:
         from forge_cv.extractor import (
             extract_container_frame,
+            read_container_frame,
             read_raw_clip_frame,
             read_sequence_frame,
         )
@@ -85,7 +91,9 @@ def main() -> int:
     assume = args.source_cs or None
     ext = os.path.splitext(args.plate)[1].lower()
     is_raw_clip = ext in _RAW_CLIP_EXTS
-    is_container = ext in _CONTAINER_EXTS
+    is_forgeio_container = ext in _FORGEIO_CONTAINER_EXTS
+    is_ffmpeg_container = ext in _FFMPEG_CONTAINER_EXTS
+    is_container = is_forgeio_container or is_ffmpeg_container
 
     try:
         if is_raw_clip:
@@ -95,7 +103,14 @@ def main() -> int:
                 working_space=ws,
                 assume_source=assume,
             )
-        elif is_container:
+        elif is_forgeio_container:
+            px = read_container_frame(
+                args.plate,
+                args.frame,
+                working_space=ws,
+                assume_source=assume,
+            )
+        elif is_ffmpeg_container:
             px = extract_container_frame(
                 args.plate,
                 args.frame,
@@ -117,7 +132,14 @@ def main() -> int:
         print(f"{type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
-    kind = "raw_clip" if is_raw_clip else ("container" if is_container else "sequence")
+    if is_raw_clip:
+        kind = "raw_clip"
+    elif is_forgeio_container:
+        kind = "container(forge-io)"
+    elif is_ffmpeg_container:
+        kind = "container(ffmpeg/.mxf)"
+    else:
+        kind = "sequence"
     print("path_kind:", kind)
     print("shape:", px.shape)
     print("dtype:", px.dtype)
@@ -125,13 +147,14 @@ def main() -> int:
     print("min:", float(px.min()), "max:", float(px.max()))
 
     # Header-only metadata via forge_io for diagnostics. Sequence path goes
-    # through resolve_pattern; raw clip is the literal path; container would
-    # need ffprobe (skipped here).
-    if not is_container:
+    # through resolve_pattern; raw clip and forge-io containers are the literal
+    # path (containers via ffprobe in forge-io v0.4.0+). The .mxf ffmpeg
+    # fallback isn't a forge_io reader, so skip its metadata probe.
+    if not is_ffmpeg_container:
         try:
             from forge_io import read_metadata
 
-            if is_raw_clip:
+            if is_raw_clip or is_forgeio_container:
                 resolved = args.plate
             else:
                 from forge_io import resolve_pattern

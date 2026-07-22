@@ -24,7 +24,7 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 
 - Autodesk Flame 2025+
 - Miniconda or Anaconda
-- ffmpeg (for MP4/MOV reference extraction)
+- ffmpeg (used by forge-io v0.4.0+ to decode `.mov/.mp4/...` containers, and by the hook's `.mxf` fallback)
 - **OpenImageIO + OpenColorIO** (pulled in by the **forge-io** dependency; Conda/ASWF-style stacks satisfy them).
 - A Flame project with a colour management config selected (Project Settings → Colour Management → pick one). The hook reads `{setups}/colour_mgmt/config.ocio` at run time; no shell OCIO env needed.
 
@@ -37,7 +37,7 @@ forge-io v0.3.0+ decodes ARRI `.ari/.arx` (via [art-cmd](https://www.arri.com/en
 | ARRI `.ari` / `.arx` | art-cmd | `/Applications/art-cmd_*/bin/art-cmd`, `/usr/local/bin/art-cmd`, `/opt/art-cmd/bin/art-cmd` |
 | RED `.r3d` | REDline | `/Applications/REDCINE-X*/…/REDline`, `/usr/local/bin/REDline`, `/opt/REDCINE-X/REDline` |
 
-**RED OCIO caveat:** forge-io v0.3.2 emits `source_colorspace="Linear REDWideGamutRGB"`, which is the OCIO 2.x studio-config canonical name but is **not** in Flame's stock `flame_core_config` / `aces2.0_config` as of 2026.0. For R3D workflows, add `Linear REDWideGamutRGB` as a colorspace in your project's `project_custom_config.ocio` (either real RWG→sRGB math, or alias to `ACEScg` for a CV-acceptable approximation — small gamut shift, transfer is correct, SIFT doesn't care). ARRI's emitted `ACES2065-1` resolves natively in the Flame configs.
+**RED OCIO caveat:** forge-io v0.4.0 emits `source_colorspace="Linear REDWideGamutRGB"`, which is the OCIO 2.x studio-config canonical name but is **not** in Flame's stock `flame_core_config` / `aces2.0_config` as of 2026.0. For R3D workflows, add `Linear REDWideGamutRGB` as a colorspace in your project's `project_custom_config.ocio` (either real RWG→sRGB math, or alias to `ACEScg` for a CV-acceptable approximation — small gamut shift, transfer is correct, SIFT doesn't care). ARRI's emitted `ACES2065-1` resolves natively in the Flame configs.
 
 ## Install
 
@@ -49,7 +49,7 @@ bash install.sh
 
 The installer will:
 1. Create (or reuse) a conda environment with Python 3.11
-2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.3.2`, which decodes ARRI `.ari/.arx` and RED `.r3d` with OCIO-canonical source colorspace names — push tags to GitHub before installing on a fresh machine)
+2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.4.0`, which decodes editorial containers `.mov/.mp4/.m4v/.avi/.mkv` internally with frame-accurate seeking, plus ARRI `.ari/.arx` and RED `.r3d` — push tags to GitHub before installing on a fresh machine)
 3. Optionally install SuperPoint support (torch + lightglue, ~2 GB)
 4. Install ffmpeg via conda-forge
 5. Detect REDline and art-cmd at standard install paths; prompt before persisting them as `red_backend:` / `arri_backend:` in `~/.forge/config.yaml`
@@ -79,10 +79,11 @@ import sys; [sys.modules.pop(k) for k in list(sys.modules) if 'forge_cv_align' i
 
 ## Validation
 
-Quick read smoke. Three-way dispatches on extension exactly like the solver does:
+Quick read smoke. Dispatches on extension exactly like the solver does:
 
 - `.r3d` → `forge_cv.extractor.read_raw_clip_frame` (single-file clip, intra-clip frame_index forwarded)
-- `.mov/.mp4/.mxf` → `extract_container_frame` (ffmpeg seek → PNG → forge-io)
+- `.mov/.mp4/.m4v/.avi/.mkv` → `read_container_frame` → forge-io `read(frame_index=N)` (v0.4.0 frame-accurate decode; no fps needed)
+- `.mxf` → `extract_container_frame` (forge-io won't register `.mxf`; hook shells ffmpeg with a probed-fps time seek)
 - everything else → `read_sequence_frame` (`resolve_pattern` + forge-io)
 
 Requires a Python env where **forge-io** + **OpenImageIO** import (e.g. the `forge` conda env after `install.sh`).
@@ -216,5 +217,5 @@ Flame Python (hook)
 - **Low confidence on `.ari/.arx`** — make sure you're on `forge-align ≥ v0.3.2`. Earlier versions wrongly dispatched ARRI sequences through the single-file raw-clip path, decoding the same frame for every keyframe.
 - **R3D frame selection no-op** — requires forge-io ≥ v0.3.1. Earlier versions always decoded clip frame 0.
 - **Timewarp error** — if you see `RuntimeError: This method is only available when using the Speed/Timing mode`, redeploy the hook.
-- **ffmpeg errors** — ensure ffmpeg is installed and accessible. Required for MP4/MOV reference extraction.
+- **ffmpeg errors / `FFmpegUnavailableError`** — ensure ffmpeg (and ffprobe) are installed in the solver's conda env. forge-io v0.4.0+ decodes `.mov/.mp4/...` containers via ffmpeg, discovered on `PATH` or via `FORGE_FFMPEG_PATH` / `FORGE_FFPROBE_PATH`. `read_container_frame` resolves the env-local binaries (relative to the solver's Python) and exports those vars just before the decode, so it works for any entry point — Flame hook, direct `cli_solve`, or smoke — even when the env `bin/` isn't on `PATH`. This error means neither the env binaries nor a `PATH`/env-var copy could be found.
 - **Wrong conda Python** — check `~/.forge/config.yaml` points to the correct Python path. Re-run `bash install.sh` to update.
