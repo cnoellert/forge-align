@@ -104,6 +104,9 @@ def _subprocess_env():
 
     - FORGE_RED_REDLINE_PATH / FORGE_ARRI_ART_PATH from ~/.forge/config.yaml
       (forge-io's vendor-raw decode backends).
+    - FORGE_FFMPEG_PATH / FORGE_FFPROBE_PATH from the solver conda env
+      (forge-io v0.4.0+ decodes .mov/.mp4/... via ffmpeg, discovered on PATH
+      or via these vars; the env bin isn't necessarily on Flame's PATH).
     - OCIO from the active Flame project's colour_mgmt/config.ocio
       (forge-io's working_space="sRGB" transform requires a config).
 
@@ -117,6 +120,11 @@ def _subprocess_env():
         env["FORGE_RED_REDLINE_PATH"] = red
     if arri and not env.get("FORGE_ARRI_ART_PATH") and not env.get("FORGE_ARRI_SDK_PATH"):
         env["FORGE_ARRI_ART_PATH"] = arri
+    for var, binname in (("FORGE_FFMPEG_PATH", "ffmpeg"), ("FORGE_FFPROBE_PATH", "ffprobe")):
+        if not env.get(var):
+            resolved = _resolve_bin(binname)
+            if resolved != binname and os.path.exists(resolved):
+                env[var] = resolved
     if not env.get("OCIO"):
         ocio = _resolve_flame_ocio_config()
         if ocio:
@@ -653,7 +661,7 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
 # Segment info extraction
 # ---------------------------------------------------------------------------
 
-_CONTAINER_EXTS = frozenset(('.mov', '.mp4', '.mxf', '.avi', '.mkv'))
+_CONTAINER_EXTS = frozenset(('.mov', '.mp4', '.m4v', '.mxf', '.avi', '.mkv'))
 
 # ARRI / RED raw formats are decoded by forge-io v0.3.0+ via vendor backends
 # (art-cmd for ARRI, REDline for RED). Availability is probed per-ext at

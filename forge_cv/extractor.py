@@ -63,6 +63,54 @@ def read_sequence_frame(
     return np.ascontiguousarray(img.pixels, dtype=np.float32)
 
 
+def read_container_frame(
+    container_path: str,
+    frame_index: int,
+    *,
+    working_space: str | None = "sRGB",
+    assume_source: str | None = None,
+    ocio_config: str | Path | None = None,
+) -> np.ndarray:
+    """Read a frame from an editorial/delivery container via forge-io.
+
+    For ``.mov`` / ``.mp4`` / ``.m4v`` / ``.avi`` / ``.mkv``, forge-io v0.4.0+
+    owns the ffmpeg decode: ``read(path, frame_index=N)`` selects frame ``N`` by
+    **frame number** (decode-from-head ``select='gte(n,N)'``), which is exact for
+    long-GOP codecs and fractional rates — no caller-supplied fps, and no ±1
+    drift from input-side time seeking. Editorial containers report
+    ``source_colorspace="unknown"``, so ``assume_source`` (Flame's CS) drives the
+    ``working_space`` transform.
+
+    forge-io deliberately does **not** register ``.mxf`` (it can't disambiguate
+    editorial MXF from Sony X-OCN raw) — those stay on :func:`extract_container_frame`.
+
+    forge-io discovers ffmpeg/ffprobe on ``PATH`` or via ``FORGE_FFMPEG_PATH`` /
+    ``FORGE_FFPROBE_PATH``; the Flame hook injects the conda-env binaries so the
+    solver subprocess finds them regardless of how Flame was launched.
+
+    Args:
+        container_path: Path to the video file.
+        frame_index: 0-based frame number to read.
+        working_space: OCIO destination space, or ``None`` to disable transforms.
+        assume_source: Passed through when the file declares ``unknown`` colorspace.
+        ocio_config: Optional explicit OCIO config path (else ``OCIO`` env).
+
+    Returns:
+        Frame as float32 RGB array, shape (H, W, 3).
+    """
+    if not os.path.exists(container_path):
+        raise FileNotFoundError(f"Container not found: {container_path}")
+
+    img = read(
+        container_path,
+        working_space=working_space,
+        assume_source=assume_source,
+        ocio_config=ocio_config,
+        frame_index=frame_index,
+    )
+    return np.ascontiguousarray(img.pixels, dtype=np.float32)
+
+
 def extract_container_frame(
     container_path: str,
     frame_index: int,
@@ -73,12 +121,18 @@ def extract_container_frame(
     assume_source: str | None = None,
     ocio_config: str | Path | None = None,
 ) -> np.ndarray:
-    """Extract a single frame from a video container (MOV/MP4) via ffmpeg.
+    """Extract a single frame from an ``.mxf`` container via ffmpeg.
+
+    Fallback decode for the one container forge-io won't touch: editorial
+    ``.mxf`` (DNxHD/XDCAM). All other containers (``.mov`` / ``.mp4`` / …) go
+    through :func:`read_container_frame`, which delegates to forge-io v0.4.0's
+    frame-accurate reader.
 
     Uses time-based seeking (-ss before -i) for fast random access.
     ffmpeg seeks to the nearest keyframe then decodes forward to the
-    exact target PTS — frame-accurate for all codecs (ProRes, H.264,
-    H.265, etc.).
+    exact target PTS. Because the seek time is ``frame_index / fps``, an
+    inaccurate ``fps`` can land ±1 frame off on fractional rates — pass the
+    real container rate (probed via ffprobe by the hook).
 
     Args:
         container_path: Path to the video file.

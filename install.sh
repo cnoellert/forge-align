@@ -285,6 +285,9 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
     fi
 
     # ── Step 4: Install ffmpeg (via conda, into the env) ─────────
+    # ffmpeg + ffprobe: forge-io v0.4.0+ decodes .mov/.mp4/... containers with
+    # them (hook injects FORGE_FFMPEG_PATH / FORGE_FFPROBE_PATH from this env);
+    # also used by the hook's .mxf fallback and ffprobe fps probe.
     echo ""
     if "$ENV_BIN/ffmpeg" -version &>/dev/null 2>&1; then
         ok "ffmpeg found in env"
@@ -294,7 +297,7 @@ if [[ -z "$DEPLOY_ONLY" ]]; then
         if "$ENV_BIN/ffmpeg" -version &>/dev/null 2>&1; then
             ok "ffmpeg installed"
         else
-            warn "ffmpeg install failed — MOV/MP4 reference extraction won't work"
+            warn "ffmpeg install failed — MOV/MP4/MXF reference extraction won't work"
             warn "Install manually: conda install -n $ENV_NAME -c conda-forge ffmpeg"
         fi
     fi
