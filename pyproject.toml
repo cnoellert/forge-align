@@ -21,3 +21,6 @@ superpoint = [
 
 [tool.setuptools.packages.find]
 include = ["forge_cv*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
