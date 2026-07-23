@@ -814,16 +814,13 @@ def _run_cv_solve(source_info, ref_info, source_frames, ref_frames,
     import json
     import subprocess
 
-    # For raw camera clips, forge-io's reader emits a canonical scene-linear
-    # source CS (RED → REDWideGamutRGB/linear, ARRI → AP0/D60/linear) and the
-    # extractor lands the solver on display-referred sRGB via OCIO. Flame's
-    # get_colour_space() typically returns the log-encoded camera CS — passing
-    # that as --source-cs would override OCIO assume_source incorrectly. Strip
-    # it for raw clips so OCIO + forge-io own the color science end-to-end.
-    src_ext = os.path.splitext(source_info["file_path"])[1].lower()
-    ref_ext = os.path.splitext(ref_info["file_path"])[1].lower()
-    src_cs = "" if src_ext in _ARRI_EXTS or src_ext in _RED_EXTS else source_info.get("colourspace", "")
-    ref_cs = "" if ref_ext in _ARRI_EXTS or ref_ext in _RED_EXTS else ref_info.get("colourspace", "")
+    # Pass Flame's segment colourspace uniformly. forge-io v0.6.0's assume_source
+    # is fill-unknown-only: a reader that declares an authoritative CS (raw →
+    # ACES2065-1 / Linear REDWideGamutRGB, including ARRIRAW-in-MXF) wins and
+    # Flame's log-encoded label is safely ignored; editorial containers / DPX that
+    # declare `unknown` are filled from it. No per-format CS stripping needed.
+    src_cs = source_info.get("colourspace", "")
+    ref_cs = ref_info.get("colourspace", "")
 
     cmd = [
         _FORGE_PYTHON, "-m", "forge_cv.cli_solve",
