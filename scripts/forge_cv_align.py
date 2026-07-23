@@ -385,7 +385,8 @@ def _show_cv_align_dialog(segments, default_ref_idx):
 
     # ── Frame sampling ──
     frames_combo = QComboBox()
-    frames_combo.addItems(["First Frame", "First + Last", "Every N Frames"])
+    frames_combo.addItems(["First Frame", "First + Last", "Every N Frames",
+                           "Current Frame (Playhead)"])
     frames_combo.setCurrentIndex(0)
     layout.addLayout(_field_row("Frames", frames_combo))
 
@@ -448,7 +449,7 @@ def _show_cv_align_dialog(segments, default_ref_idx):
     if dialog.exec() != QDialog.Accepted:
         return None
 
-    frames_map = {0: "first", 1: "first_last", 2: "every_n"}
+    frames_map = {0: "first", 1: "first_last", 2: "every_n", 3: "playhead"}
     mode_map = {0: "similarity", 1: "affine", 2: "homography"}
     det_map  = {0: "sift", 1: "akaze", 2: "superpoint"}
 
@@ -578,6 +579,23 @@ def _align_single_segment(source_seg, ref_seg, ref_info, ref_base,
         # Always include last frame
         if sample_records[-1] != overlap_out:
             sample_records.append(overlap_out)
+    elif solve_frames == "playhead":
+        # Solve the single frame the timeline playhead is parked on. Lets the
+        # artist pick the best frame (sharp, well-framed, features visible) by
+        # parking on it, instead of a heuristic like "first frame".
+        #
+        # PyTime.frame is the absolute record frame — the same space as
+        # record_in_frame (seg.record_in.frame), so it compares directly to the
+        # source↔ref overlap. One frame → one transform → one Action keyframe:
+        # ideal for static/locked shots, or a seed keyframe to refine on moves.
+        import flame
+        playhead = flame.timeline.clip.current_time.get_value().frame
+        if playhead < overlap_in or playhead > overlap_out:
+            _log(f"Skipping {source_name}: playhead {playhead} outside "
+                 f"source↔ref overlap {overlap_in}-{overlap_out}")
+            return "Skipped (playhead outside ref overlap)"
+        _log(f"Playhead solve at record frame {playhead}")
+        sample_records = [playhead]
     else:
         sample_records = [overlap_in]
 
