@@ -9,16 +9,11 @@ import os
 import sys
 
 
-# Editorial/delivery containers forge-io v0.4.0+ decodes internally (ffmpeg,
-# frame-accurate frame-number seeking — no caller fps needed).
-_FORGEIO_CONTAINER_EXTS = frozenset((".mp4", ".mov", ".m4v", ".avi", ".mkv"))
-
-# .mxf is deliberately NOT registered by forge-io (can't disambiguate editorial
-# MXF from Sony X-OCN raw at the extension level), so we shell ffmpeg ourselves
-# via extract_container_frame (time-based seek, needs the container fps).
-_FFMPEG_CONTAINER_EXTS = frozenset((".mxf",))
-
-_CONTAINER_EXTS = _FORGEIO_CONTAINER_EXTS | _FFMPEG_CONTAINER_EXTS
+# Containers forge-io decodes internally. Editorial (.mov/.mp4/... via ffmpeg,
+# frame-accurate) plus .mxf, which forge-io v0.5.0+ content-classifies with
+# ffprobe: editorial essence → ffmpeg, ARRIRAW-in-MXF → ART-CMD, Sony X-OCN →
+# UnsupportedFileError. frame_idx is the 0-based frame within the file for all.
+_CONTAINER_EXTS = frozenset((".mp4", ".mov", ".m4v", ".avi", ".mkv", ".mxf"))
 
 # Single-file raw clips — one file per CLIP (not per frame). frame_idx is the
 # intra-clip frame and gets forwarded to forge-io's reader. ARRI .ari/.arx are
@@ -29,9 +24,12 @@ _RAW_CLIP_EXTS = frozenset((".r3d",))
 
 
 def _read_frame(path, frame_idx, fps=23.976, *, assume_source: str | None = None):
-    """Read a frame, dispatching raw clip / container / image sequence by extension."""
+    """Read a frame, dispatching raw clip / container / image sequence by extension.
+
+    ``fps`` is retained for signature compatibility but no longer used: forge-io
+    selects container frames by number, not by fps-derived time seek.
+    """
     from forge_cv.extractor import (
-        extract_container_frame,
         read_container_frame,
         read_raw_clip_frame,
         read_sequence_frame,
@@ -40,10 +38,8 @@ def _read_frame(path, frame_idx, fps=23.976, *, assume_source: str | None = None
     ext = os.path.splitext(path)[1].lower()
     if ext in _RAW_CLIP_EXTS:
         return read_raw_clip_frame(path, frame_idx, assume_source=assume_source)
-    if ext in _FORGEIO_CONTAINER_EXTS:
+    if ext in _CONTAINER_EXTS:
         return read_container_frame(path, frame_idx, assume_source=assume_source)
-    if ext in _FFMPEG_CONTAINER_EXTS:
-        return extract_container_frame(path, frame_idx, fps=fps, assume_source=assume_source)
     return read_sequence_frame(path, frame_idx, assume_source=assume_source)
 
 

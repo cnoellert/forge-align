@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -102,8 +99,9 @@ def read_container_frame(
     ``source_colorspace="unknown"``, so ``assume_source`` (Flame's CS) drives the
     ``working_space`` transform.
 
-    forge-io deliberately does **not** register ``.mxf`` (it can't disambiguate
-    editorial MXF from Sony X-OCN raw) — those stay on :func:`extract_container_frame`.
+    Includes ``.mxf``: forge-io v0.5.0+ content-classifies MXF essence with
+    ffprobe (editorial → ffmpeg, ARRIRAW-in-MXF → ART-CMD, Sony X-OCN →
+    ``UnsupportedFileError``), so ``.mxf`` reads through this same path.
 
     forge-io discovers ffmpeg/ffprobe on ``PATH`` or via ``FORGE_FFMPEG_PATH`` /
     ``FORGE_FFPROBE_PATH``. :func:`_ensure_ffmpeg_env` resolves the conda-env
@@ -133,102 +131,6 @@ def read_container_frame(
         frame_index=frame_index,
     )
     return np.ascontiguousarray(img.pixels, dtype=np.float32)
-
-
-def extract_container_frame(
-    container_path: str,
-    frame_index: int,
-    temp_dir: Optional[str] = None,
-    fps: float = 23.976,
-    *,
-    working_space: str | None = "sRGB",
-    assume_source: str | None = None,
-    ocio_config: str | Path | None = None,
-) -> np.ndarray:
-    """Extract a single frame from an ``.mxf`` container via ffmpeg.
-
-    Fallback decode for the one container forge-io won't touch: editorial
-    ``.mxf`` (DNxHD/XDCAM). All other containers (``.mov`` / ``.mp4`` / …) go
-    through :func:`read_container_frame`, which delegates to forge-io v0.4.0's
-    frame-accurate reader.
-
-    Uses time-based seeking (-ss before -i) for fast random access.
-    ffmpeg seeks to the nearest keyframe then decodes forward to the
-    exact target PTS. Because the seek time is ``frame_index / fps``, an
-    inaccurate ``fps`` can land ±1 frame off on fractional rates — pass the
-    real container rate (probed via ffprobe by the hook).
-
-    Args:
-        container_path: Path to the video file.
-        frame_index: 0-based frame number to extract.
-        temp_dir: Optional temp directory for intermediate PNG.
-        fps: Container frame rate (for converting frame index to seek time).
-        working_space: OCIO destination for the decoded PNG (default ``sRGB``).
-        assume_source: Optional OCIO assume role for unknown sources.
-        ocio_config: Optional explicit OCIO config path.
-
-    Returns:
-        Frame as float32 RGB array, shape (H, W, 3).
-    """
-    if not os.path.exists(container_path):
-        raise FileNotFoundError(f"Container not found: {container_path}")
-
-    cleanup = temp_dir is None
-    if temp_dir is None:
-        temp_dir = tempfile.mkdtemp(prefix="forge_cv_")
-
-    out_path = os.path.join(temp_dir, f"frame_{frame_index:06d}.png")
-    try:
-        seek_time = frame_index / fps
-        cmd = [
-            _resolve_bin("ffmpeg"),
-            "-y",
-            "-nostdin",
-            "-ss",
-            f"{seek_time:.6f}",
-            "-i",
-            container_path,
-            "-frames:v",
-            "1",
-            "-vsync",
-            "0",
-            out_path,
-        ]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"ffmpeg failed (exit {result.returncode}): {stderr[-500:]}"
-            )
-        if not os.path.exists(out_path):
-            raise RuntimeError("ffmpeg produced no output frame")
-
-        img = read(
-            out_path,
-            working_space=working_space,
-            assume_source=assume_source,
-            ocio_config=ocio_config,
-        )
-        return np.ascontiguousarray(img.pixels, dtype=np.float32)
-    finally:
-        if cleanup:
-            _cleanup_temp(temp_dir)
-
-
-def extract_container_frames(
-    container_path: str,
-    frame_indices: list[int],
-    temp_dir: Optional[str] = None,
-) -> list[np.ndarray]:
-    """Extract multiple frames from a container. Convenience wrapper."""
-    return [
-        extract_container_frame(container_path, idx, temp_dir)
-        for idx in frame_indices
-    ]
 
 
 def read_raw_clip_frame(
@@ -263,18 +165,3 @@ def read_raw_clip_frame(
         frame_index=frame_index,
     )
     return np.ascontiguousarray(img.pixels, dtype=np.float32)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _cleanup_temp(temp_dir: str) -> None:
-    """Remove temp directory and contents."""
-    import shutil
-
-    try:
-        shutil.rmtree(temp_dir)
-    except OSError:
-        pass

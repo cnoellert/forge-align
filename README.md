@@ -24,7 +24,7 @@ Computer vision alignment tool for Autodesk Flame. Matches plate segments to a r
 
 - Autodesk Flame 2025+
 - Miniconda or Anaconda
-- ffmpeg (used by forge-io v0.4.0+ to decode `.mov/.mp4/...` containers, and by the hook's `.mxf` fallback)
+- ffmpeg + ffprobe (used by forge-io to decode `.mov/.mp4/.mxf/...` containers and classify MXF essence)
 - **OpenImageIO + OpenColorIO** (pulled in by the **forge-io** dependency; Conda/ASWF-style stacks satisfy them).
 - A Flame project with a colour management config selected (Project Settings → Colour Management → pick one). The hook reads `{setups}/colour_mgmt/config.ocio` at run time; no shell OCIO env needed.
 
@@ -37,7 +37,7 @@ forge-io v0.3.0+ decodes ARRI `.ari/.arx` (via [art-cmd](https://www.arri.com/en
 | ARRI `.ari` / `.arx` | art-cmd | `/Applications/art-cmd_*/bin/art-cmd`, `/usr/local/bin/art-cmd`, `/opt/art-cmd/bin/art-cmd` |
 | RED `.r3d` | REDline | `/Applications/REDCINE-X*/…/REDline`, `/usr/local/bin/REDline`, `/opt/REDCINE-X/REDline` |
 
-**RED OCIO caveat:** forge-io v0.4.0 emits `source_colorspace="Linear REDWideGamutRGB"`, which is the OCIO 2.x studio-config canonical name but is **not** in Flame's stock `flame_core_config` / `aces2.0_config` as of 2026.0. For R3D workflows, add `Linear REDWideGamutRGB` as a colorspace in your project's `project_custom_config.ocio` (either real RWG→sRGB math, or alias to `ACEScg` for a CV-acceptable approximation — small gamut shift, transfer is correct, SIFT doesn't care). ARRI's emitted `ACES2065-1` resolves natively in the Flame configs.
+**RED OCIO caveat:** forge-io emits `source_colorspace="Linear REDWideGamutRGB"`, which is the OCIO 2.x studio-config canonical name but is **not** in Flame's stock `flame_core_config` / `aces2.0_config` as of 2026.0. For R3D workflows, add `Linear REDWideGamutRGB` as a colorspace in your project's `project_custom_config.ocio` (either real RWG→sRGB math, or alias to `ACEScg` for a CV-acceptable approximation — small gamut shift, transfer is correct, SIFT doesn't care). ARRI's emitted `ACES2065-1` resolves natively in the Flame configs.
 
 ## Install
 
@@ -49,7 +49,7 @@ bash install.sh
 
 The installer will:
 1. Create (or reuse) a conda environment with Python 3.11
-2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.4.0`, which decodes editorial containers `.mov/.mp4/.m4v/.avi/.mkv` internally with frame-accurate seeking, plus ARRI `.ari/.arx` and RED `.r3d` — push tags to GitHub before installing on a fresh machine)
+2. Install OpenCV, NumPy, and **forge-io** (pinned from git tag `v0.6.0`, which decodes editorial containers `.mov/.mp4/.m4v/.avi/.mkv`, `.mxf` (essence-classified: editorial + ARRIRAW-in-MXF), ARRI `.ari/.arx`, and RED `.r3d`, with fill-unknown-only colourspace resolution — push tags to GitHub before installing on a fresh machine)
 3. Optionally install SuperPoint support (torch + lightglue, ~2 GB)
 4. Install ffmpeg via conda-forge
 5. Detect REDline and art-cmd at standard install paths; prompt before persisting them as `red_backend:` / `arri_backend:` in `~/.forge/config.yaml`
@@ -82,8 +82,7 @@ import sys; [sys.modules.pop(k) for k in list(sys.modules) if 'forge_cv_align' i
 Quick read smoke. Dispatches on extension exactly like the solver does:
 
 - `.r3d` → `forge_cv.extractor.read_raw_clip_frame` (single-file clip, intra-clip frame_index forwarded)
-- `.mov/.mp4/.m4v/.avi/.mkv` → `read_container_frame` → forge-io `read(frame_index=N)` (v0.4.0 frame-accurate decode; no fps needed)
-- `.mxf` → `extract_container_frame` (forge-io won't register `.mxf`; hook shells ffmpeg with a probed-fps time seek)
+- `.mov/.mp4/.m4v/.avi/.mkv/.mxf` → `read_container_frame` → forge-io `read(frame_index=N)` (frame-accurate decode; `.mxf` is essence-classified by forge-io — editorial → ffmpeg, ARRIRAW-in-MXF → ART-CMD, Sony X-OCN → `UnsupportedFileError`)
 - everything else → `read_sequence_frame` (`resolve_pattern` + forge-io)
 
 Requires a Python env where **forge-io** + **OpenImageIO** import (e.g. the `forge` conda env after `install.sh`).
@@ -156,14 +155,14 @@ The tool creates Action effects on each plate segment with computed transforms.
 All transfer-shaping is delegated to **OCIO via forge-io** — the solver itself does nothing colour-aware beyond a 255× clip. Flow:
 
 1. **Source colourspace identification** — forge-io's reader emits the canonical name of what it decoded to:
-   - ARRI `.ari/.arx` → `ACES2065-1` (via art-cmd, scene-linear ACES AP0/D60)
+   - ARRI `.ari/.arx` + ARRIRAW-in-`.mxf` → `ACES2065-1` (via art-cmd, scene-linear ACES AP0/D60)
    - RED `.r3d` → `Linear REDWideGamutRGB` (via REDline, scene-linear RWG)
-   - EXR/DPX/PNG/MOV → whatever the file declares (or `unknown` → falls through to the segment's Flame CS via `assume_source`)
+   - EXR/DPX/PNG/MOV + editorial `.mxf` → whatever the file declares (or `unknown` → falls through to the segment's Flame CS via `assume_source`)
 2. **OCIO config resolution** — the hook reads the active Flame project's `{setups}/colour_mgmt/config.ocio` symlink at run time and exports it as `OCIO=` to the solver subprocess. No shell env or install-time sync required.
 3. **Transform to display-encoded sRGB** — forge-io builds an OCIO processor `source_colorspace → sRGB` and applies it. `sRGB` resolves via OCIO config alias (e.g. `sRGB Encoded Rec.709 (sRGB)` in Flame's `aces2.0_config`) — the actual sRGB OETF curve is applied (linear 0.18 → encoded ~0.461).
 4. **Solver receives display-referred sRGB-shaped pixels** — `_to_gray_uint8` does a simple `clip(x*255, 0, 255).astype(uint8)`. SIFT sees the expected contrast distribution regardless of source.
 
-For raw clips, the hook **strips** Flame's `get_colour_space()` string from `--source-cs` (it would be the in-camera log encoding, which would incorrectly override forge-io's canonical scene-linear emission via `assume_source`). For non-raw segments, Flame's CS is passed through and forge-io uses it as `assume_source` when the file declares `unknown`.
+The hook passes Flame's `get_colour_space()` **uniformly** as `--source-cs`. forge-io ≥ v0.6.0 treats `assume_source` as **fill-unknown-only**: a reader that declares an authoritative colourspace (raw → `ACES2065-1` / `Linear REDWideGamutRGB`, including ARRIRAW-in-`.mxf`) always wins, so Flame's log-encoded label is safely ignored; only files that decode to `unknown` (editorial containers, DPX) are filled from it. No per-format CS stripping is needed in the hook.
 
 ## Detectors
 
@@ -217,5 +216,6 @@ Flame Python (hook)
 - **Low confidence on `.ari/.arx`** — make sure you're on `forge-align ≥ v0.3.2`. Earlier versions wrongly dispatched ARRI sequences through the single-file raw-clip path, decoding the same frame for every keyframe.
 - **R3D frame selection no-op** — requires forge-io ≥ v0.3.1. Earlier versions always decoded clip frame 0.
 - **Timewarp error** — if you see `RuntimeError: This method is only available when using the Speed/Timing mode`, redeploy the hook.
-- **ffmpeg errors / `FFmpegUnavailableError`** — ensure ffmpeg (and ffprobe) are installed in the solver's conda env. forge-io v0.4.0+ decodes `.mov/.mp4/...` containers via ffmpeg, discovered on `PATH` or via `FORGE_FFMPEG_PATH` / `FORGE_FFPROBE_PATH`. `read_container_frame` resolves the env-local binaries (relative to the solver's Python) and exports those vars just before the decode, so it works for any entry point — Flame hook, direct `cli_solve`, or smoke — even when the env `bin/` isn't on `PATH`. This error means neither the env binaries nor a `PATH`/env-var copy could be found.
+- **ffmpeg errors / `FFmpegUnavailableError`** — ensure ffmpeg (and ffprobe) are installed in the solver's conda env. forge-io decodes `.mov/.mp4/.mxf/...` containers via ffmpeg and classifies MXF essence via ffprobe, discovered on `PATH` or via `FORGE_FFMPEG_PATH` / `FORGE_FFPROBE_PATH`. `read_container_frame` resolves the env-local binaries (relative to the solver's Python) and exports those vars just before the decode, so it works for any entry point — Flame hook, direct `cli_solve`, or smoke — even when the env `bin/` isn't on `PATH`. This error means neither the env binaries nor a `PATH`/env-var copy could be found.
+- **`UnsupportedFileError` on `.mxf`** — forge-io classifies MXF essence: editorial (ProRes/DNxHD/XDCAM) decodes via ffmpeg, ARRIRAW-in-MXF via ART-CMD (needs `arri_backend` / `FORGE_ARRI_ART_PATH`, same as `.ari/.arx`). Sony X-OCN and unclassifiable MXF are unsupported by design. If an ARRIRAW `.mxf` raises this, check the ART-CMD backend is configured.
 - **Wrong conda Python** — check `~/.forge/config.yaml` points to the correct Python path. Re-run `bash install.sh` to update.
